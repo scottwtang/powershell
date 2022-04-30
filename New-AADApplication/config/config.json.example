@@ -1,0 +1,99 @@
+{
+    "app_properties": {
+        "app_id": "",
+        "tenant_id": "",
+        "client_secret": ""
+    }
+},
+    "default_app_registration_config": {
+        "AddIns": [],
+        "Api": {
+            "AcceptMappedClaims": null,
+            "KnownClientApplications": [],
+            "Oauth2PermissionScopes": [],
+            "PreAuthorizedApplications": [],
+            "RequestedAccessTokenVersion": null
+        },
+        "AppId": null,
+        "AppRoles": [],
+        "ApplicationTemplateId": null,
+        "CreatedDateTime": null,
+        "CreatedOnBehalfOf": {
+            "DeletedDateTime": null,
+            "Id": null
+        },
+        "DeletedDateTime": null,
+        "Description": null,
+        "DisabledByMicrosoftStatus": null,
+        "DisplayName": null,
+        "ExtensionProperties": null,
+        "GroupMembershipClaims": null,
+        "HomeRealmDiscoveryPolicies": null,
+        "Id": null,
+        "IdentifierUris": [],
+        "Info": {
+            "LogoUrl": null,
+            "MarketingUrl": null,
+            "PrivacyStatementUrl": null,
+            "SupportUrl": null,
+            "TermsOfServiceUrl": null
+        },
+        "IsDeviceOnlyAuthSupported": null,
+        "IsFallbackPublicClient": null,
+        "KeyCredentials": [],
+        "Logo": null,
+        "Notes": null,
+        "Oauth2RequirePostResponse": null,
+        "OptionalClaims": {
+            "AccessToken": null,
+            "IdToken": null,
+            "Saml2Token": null
+        },
+        "Owners": null,
+        "ParentalControlSettings": {
+            "CountriesBlockedForMinors": [],
+            "LegalAgeGroupRule": "Allow"
+        },
+        "PasswordCredentials": [],
+        "PublicClient": {
+            "RedirectUris": []
+        },
+        "PublisherDomain": null,
+        "RequiredResourceAccess": [
+            {
+                "ResourceAccess": [
+                    {
+                        "Id": "e1fe6dd8-ba31-4d61-89e7-88639da4683d",
+                        "Type": "Scope"
+                    }
+                ],
+                "ResourceAppId": "00000003-0000-0000-c000-000000000000"
+            }
+        ],
+        "SignInAudience": "AzureADMyOrg",
+        "Spa": {
+            "RedirectUris": []
+        },
+        "Tags": [],
+        "TokenEncryptionKeyId": null,
+        "TokenIssuancePolicies": null,
+        "TokenLifetimePolicies": null,
+        "VerifiedPublisher": {
+            "AddedDateTime": null,
+            "DisplayName": null,
+            "VerifiedPublisherId": null
+        },
+        "Web": {
+            "HomePageUrl": null,
+            "ImplicitGrantSettings": {
+                "EnableAccessTokenIssuance": false,
+                "EnableIdTokenIssuance": false
+            },
+            "LogoutUrl": null,
+            "RedirectUris": []
+        },
+        "AdditionalProperties": {
+            "@odata.context": "https://graph.microsoft.com/v1.0/$metadata#applications/$entity"
+        }
+    }
+}
