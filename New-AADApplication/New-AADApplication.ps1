@@ -1,365 +1,425 @@
-#$credential = Get-Credential
-#$credential = New-Object System.Management.Automation.PSCredential -ArgumentList ($username, $password)
+[CmdletBinding()]
+param (
+    [parameter(Mandatory = $true)]
+    [ValidateNotNullOrEmpty()]
+    [string] $AppName,
 
-#Install-Module AzureADPreview -Force
-#Import-Module AzureADPreview
+    [parameter(Mandatory = $false)]
+    [ValidateNotNullOrEmpty()]
+    [string] $AppRegistrationOwners,
+    
+    [parameter(Mandatory = $false)]
+    [bool] $ClientSecret = $true,
+    
+    [parameter(Mandatory = $false)]
+    [ValidateNotNullOrEmpty()]
+    [string] $OwnersDirectoryRole,
+    
+    [parameter(Mandatory = $false)]
+    [ValidateNotNullOrEmpty()]
+    [string] $FolderPath = $PSScriptRoot,
+    
+    [parameter(Mandatory = $false)]
+    [ValidateNotNullOrEmpty()]
+    [string] $ConfigFolderPath = (Join-Path -Path $PSScriptRoot -ChildPath "Config"),
+    
+    [parameter(Mandatory = $false)]
+    [ValidateNotNullOrEmpty()]
+    [string] $ConfigFile = "config.json",
+    
+    [parameter(Mandatory = $false)]
+    [ValidateNotNullOrEmpty()]
+    [string] $OutputFile = "New-AADApplication-Output-AppInfo.json",
+    
+    [parameter(Mandatory = $false)]
+    [ValidateNotNullOrEmpty()]
+    [string] $LogFile = "New-AADApplication-Log-$(Get-Date -f 'yyyy-MM-dd').log"
+)
 
-#AzureADPreview\Connect-AzureAD
-#AzureAD\Connect-AzureAD)
-
-
-#region init variables to be refractored into function later
-    $folderPath = "C:\Users\$env:UserName\Downloads\AzADAppRegistration"
-
-    $inputFileName = "AppInput.json"
-    $inputFilePath = Join-Path -Path $folderPath -ChildPath $inputFileName
+begin
+{
     try
     {
-        $inputFileObject = Get-Content -Path $inputFilePath -Raw | ConvertFrom-Json
+
+        # construct file paths
+        $configFilePath = Join-Path -Path $ConfigFolderPath -ChildPath $ConfigFile
+        $outputFilePath = Join-Path -Path $FolderPath -ChildPath $OutputFile
+        $logFilePath = Join-Path -Path (Join-Path -Path $FolderPath -ChildPath "Logs") -ChildPath $LogFile
+
+        # PsFramework logging
+        if (-not (Get-Module -ListAvailable -Name PsFramework))
+        {
+            Install-Module -Name PsFramework -Scope CurrentUser -Force
+        }
+
+        Set-PSFLoggingProvider -Name LogFile -Enabled $true -FilePath $logFilePath -FileType "CSV" -UTC $true
+
+        # establish connection to AAD
+        try
+        {
+            $var = Get-MgOrganization -ErrorAction Stop
+        }
+     
+        catch [System.Security.Authentication.AuthenticationException]
+        {
+            # Disconnect-MgGraph -ErrorAction SilentlyContinue
+
+            $configFileObject = Get-Content -Path $configFilePath -Raw | ConvertFrom-Json 
+            
+            $uri = "https://login.microsoftonline.com/$($configFileObject.app_properties.tenant_id)/oauth2/v2.0/token"
+            $body =  @{
+                grant_type    = "client_credentials"
+                scope         = "https://graph.microsoft.com/.default"
+                client_id     = $configFileObject.app_properties.app_id
+                client_secret = $configFileObject.app_properties.client_secret
+            }
+ 
+            $connection = Invoke-RestMethod -Uri $uri -Method POST -Body $body 
+            $token = $connection.access_token
+ 
+            Connect-MgGraph -AccessToken $token
+        }
     }
 
     catch
     {
-        Write-PSFMessage -Level Error -Message "Ivalid JSON format from `"$inputFilePath`"" -Tag "Error" -Target $appDisplayName
-        exit
+        Write-Host "Error initializing script"
+        Write-PSFMessage -Level Error -Message "Error initializing script" -Tag "Error"
+        break
     }
 
-    $outputFileName = "AzADAppRegistrationInfo.json"
-    $outputFilePath = Join-Path -Path $folderPath -ChildPath $outputFileName
-
-    $outputFileObject = New-Object -TypeName PsObject
-
-    # PsFramework logging
-    if (-not(Get-Module -ListAvailable -Name PsFramework))
+    function Add-AADRole
     {
-        Install-Module -Name PsFramework -Scope CurrentUser
-    }
+        [CmdletBinding()]
+        param (
+            [Parameter(Mandatory = $true)]
+            [string] $User,
 
-    $logFileName = "AzADAppRegistration-$(Get-date -f 'yyyy-MM-dd').log"
-    $logFilePath = Join-Path -Path $folderPath -ChildPath $logFileName
-    Set-PSFLoggingProvider -Name LogFile -Enabled $true -FilePath $logFilePath -FileType "CSV" -UTC $true
-#endregion
+            [Parameter(Mandatory = $true)]
+            [string] $RoleName,
 
-function Add-ApplicationOwner
-{
-    <#
-    .DESCRIPTION
-        Assigns owner(s) to an Azure AD application object, after testing if the passed owner exists as a user object or group object.
-    #>
-
-    [CmdletBinding()]
-    param (
-        [Parameter(Mandatory)]
-        [string] $App,
-
-        [Parameter(Mandatory)]
-        $Owners,
-
-        [Parameter()]
-        [object] $OutputObject
-    )
-
-    foreach ($owner in $Owners)
-    {
-        Write-PSFMessage -Level Host -Message "Starting attempt to find object `"$owner`"" -Target $App
-        $ownerObjectId = (Get-AzureAdGroup -filter "DisplayName eq '$owner'").ObjectId
-
-        if ($ownerObjectId -eq $null)
+            [Parameter()]
+            [string] $AppName
+        )
+    
+        # validate the user exists
+        try
         {
+            $userObj = Get-MgUser -UserId $User -ErrorAction Stop
+            Write-PSFMessage -Level Host -Message "Retrieved user `"$User`" with object ID `"$($userObj.Id)`"" -Target $AppName
+        }
+
+        catch
+        {
+            Write-PSFMessage -Level Error -Message "Error retrieving object `"$User`"" -Target $AppName -Tag "Error" -ErrorRecord $_
+        }
+
+        try
+        {
+        
+            # validate if the directory role has been activated
+            $adminRole = Get-MgDirectoryRole -Filter "DisplayName eq '$RoleName'" -ErrorAction Stop
+
+            # if the role has not been activated, we need to get the role template to activate the role
+            if ($adminRole -eq $null)
+            {
+                $adminRoleTemplate = Get-MgDirectoryRoleTemplate -ErrorAction Stop | where {$_.DisplayName -eq $RoleName}
+                $adminRole = New-MgDirectoryRole -RoleTemplateId $adminRoleTemplate.Id
+                Write-PSFMessage -Level Host -Message "Activated directory role `"$RoleName`" with role Id `"$($adminRole.Id)`"" -Target $AppName
+            }
+        }
+
+        catch
+        {
+            Write-PSFMessage -Level Error -Message "Error finding directory role `"$RoleName`"" -Target $AppName -Tag "Error" -ErrorRecord $_
+        }
+
+        # assign the user to the activated role
+        try
+        {
+            $body = @{
+                "@odata.id"= "https://graph.microsoft.com/v1.0/directoryObjects/{$($userObj.Id)}"
+            }
+
+            New-MgDirectoryRoleMemberByRef -DirectoryRoleId $adminRole.Id -BodyParameter $body -ErrorAction Stop
+            Write-PSFMessage -Level Host -Message "Assigned directory role `"$RoleName`" to `"$User`"" -Target $AppName
+        }
+    
+        catch
+        {
+            if ($_.Exception.Message -eq "One or more added object references already exist for the following modified properties: 'members'.")
+            {
+                Write-PSFMessage -Level Error -Message "User `"$User`" is already assigned the directory role `"$RoleName`"" -Tag "Error" -Target $AppName
+            }
+
+            else
+            {
+                Write-PSFMessage -Level Error -Message "Error adding role `"$RoleName`" to user `"$User`"" -Target $AppName -Tag "Error" -ErrorRecord $_
+            }
+        }
+    }
+
+    function Add-ApplicationOwner
+    {
+        <#
+        .DESCRIPTION
+        #>
+
+        [CmdletBinding()]
+        param (
+            [Parameter(Mandatory = $true)]
+            [string] $AppObjectId,
+
+            [Parameter()]
+            [string] $AppName,
+
+            [Parameter(Mandatory = $true)]
+            $OwnerList
+        )
+
+        $OwnerList = $OwnerList.Split(";")
+        foreach ($owner in $OwnerList)
+        {
+
+            # validate the given user exists
             try
             {
-                $ownerObjectId = (Get-AzureADUser -ObjectId $owner).ObjectId
-                Write-PSFMessage -Level Host -Message "Retrieved user `"$owner`" with object ID `"$ownerObjectId`"" -Target $App
+                $ownerObjectId = (Get-MgUser -UserId $owner -ErrorAction Stop).Id
+                Write-PSFMessage -Level Host -Message "Retrieved user `"$owner`" with object ID `"$ownerObjectId`"" -Target $AppName
+            }
+            catch
+            {
+                Write-PSFMessage -Level Error -Message "Error retrieving object `"$owner`"" -Target $AppName -Tag "Error" -ErrorRecord $_
+            }
+            
+            # assign the owner to the application
+            try
+            {
+                $body = @{
+                    "@odata.id"= "https://graph.microsoft.com/v1.0/directoryObjects/{$ownerObjectId}"
+                }
+
+                New-MgApplicationOwnerByRef -ApplicationId $AppObjectId -BodyParameter $body -ErrorAction Stop
+                Write-PSFMessage -Level Host -Message "Successfully added app registration owner `"$owner`"" -Target $AppName -Tag "Success"
             }
 
-            catch [Microsoft.Open.AzureAD16.Client.ApiException]
+            catch
             {
-                if ($_.Exception.Message.Contains("does not exist or one of its queried reference-property objects are not present."))
+                if ($_.Exception.Message -eq "One or more added object references already exist for the following modified properties: 'owners'.")
                 {
-                    Write-PSFMessage -Level Error -Message "Object not found `"$owner`"" -Target $App -Tag "Error" -ErrorRecord $_
+                    Write-PSFMessage -Level Error -Message "User `"$owner`" already assigned as app registration owner" -Target $AppName -Tag "Error" -ErrorRecord $_
+                }
+
+                else
+                {
+                    Write-PSFMessage -Level Error -Message "Error adding owner `"$owner`"" -Target $AppName -Tag "Error" -ErrorRecord $_
                 }
             }
-        }
-        
-        else
-        {
-            Write-PSFMessage -Level Host -Message "Retrieved group `"$owner`" with object ID `"$ownerObjectId`"" -Target $App
+
+            if ($Script:PSBoundParameters["OwnersDirectoryRole"])
+            {
+                Add-AADRole -User $owner -RoleName $OwnersDirectoryRole
+            }
         }
 
-        try
+        # get the full list of owners and add to json output    
+        if ($outputAppValues)
         {
-            Add-AzureAdApplicationOwner -ObjectId $App -RefObjectId $ownerObjectId
-            Write-PSFMessage -Level Host -Message "Successfully added owner `"$owner`"" -Target $App -Tag "Success"
-        }
+            $owners = (Get-MgApplicationOwner -ApplicationId $AppObjectId) | ForEach-Object { 
+                [PSCustomObject] @{
+                    Id = $_.Id
+                    DisplayName = $_.AdditionalProperties.displayName
+                    UserPrincipalName = $_.AdditionalProperties.userPrincipalName
+                }
+            }
 
-        catch
-        {
-            Write-PSFMessage -Level Error -Message "Error adding owner `"$owner`"" -Target $App -Tag "Error" -ErrorRecord $_
+            $outputAppValues | Add-Member -MemberType NoteProperty -Name owners -Value $owners
         }
     }
 
-    # add to json output
-    $owners = (Get-AzureAdApplicationOwner -ObjectId $App).UserPrincipalName    
-    if ($OutputObject) {$OutputObject | Add-Member -MemberType NoteProperty -Name owners -Value $owners}
-}
-
-function Add-ClientSecret
-{
-    [CmdletBinding()]
-    param (
-        [Parameter(Mandatory)]
-        [string] $App,
-
-        [Parameter()]
-        [object] $OutputObject
-    )
-
-    # set client secret properties with the timestamp as description, and a lifetime of 2 years
-    $secretStartDate = Get-Date
-    $secretEndDate = $secretStartDate.AddYears(2)
-    $secretDescription = "Uploaded on $(Get-Date -Format `"yyyy-MM-dd HH:mm:ss`")"
-    
-    # create client secret
-    try
+    function Add-ClientSecret
     {
-        $secret = New-AzureADApplicationPasswordCredential -ObjectId $App -CustomKeyIdentifier $secretDescription -StartDate $secretStartDate -EndDate $secretEndDate
-        Write-PSFMessage -Level Host -Message "Successfully created client secret" -Target $App -Tag "Success"
-        
-        # add to json output        
-        if ($OutputObject) {$OutputObject | Add-Member -MemberType NoteProperty -Name secret_description -Value $secretDescription}
-        
-        # get all secrets from app and compare the byte-to-string CustomKeyIdentifier against our $secretDescription above
-        # this is done to obtain the secret's GUID/key ID which isn't returned when calling New-AzureADApplicationPasswordCredential
+        [CmdletBinding()]
+        param (
+            [Parameter(Mandatory = $true)]
+            [string] $AppObjectId,
+
+            [Parameter()]
+            [string] $AppName
+        )
+       
         try
         {
-            $keys = Get-AzureAdApplicationPasswordCredential -ObjectId $App | Where-Object {$_.CustomKeyIdentifier -ne $null}
 
-            foreach ($key in $keys)
-            {
-	            $enc = [system.Text.Encoding]::UTF8
-	            $keyDescription = $enc.GetString($key.CustomKeyIdentifier)
-
-	            if ($keyDescription -eq $secretDescription)
-	            {
-		            $secretId = $key.KeyId
-                    Write-PSFMessage -Level Host -Message "Successfully retrieved client secret ID `"$secretId`"" -Target $App -Tag "Success"
-	            }
+            # set client secret properties with the timestamp as description, and a lifetime of 2 years
+            $body = @{
+                DisplayName = "Uploaded on $(Get-Date -Format `"yyyy-MM-dd HH:mm:ss`")"
+                StartDateTime = Get-Date
+                EndDateTime = (Get-Date).AddMonths(24)
             }
-            
-            # add to json output
-            if ($OutputObject) {$OutputObject | Add-Member -MemberType NoteProperty -Name secret_id -Value $secretId}
+        
+            # create client secret
+            $secret = Add-MgApplicationPassword -Application $AppObjectId -PasswordCredential $body -ErrorAction Stop       
+            Write-PSFMessage -Level Host -Message "Successfully created client secret" -Target $AppName -Tag "Success"        
         }
 
         catch
         {
-            Write-PSFMessage -Level Error -Message "Error retrieving client secret ID" -Target $App -Tag "Error" -ErrorRecord $_
+            Write-PSFMessage -Level Error -Message "Error creating client secret" -Target $AppName -Tag "Error" -ErrorRecord $_
+        }
+
+        # add to json output        
+        if ($outputAppValues)
+        {
+            $outputAppValues | Add-Member -MemberType NoteProperty -Name secret_id -Value $secret.KeyId
+            $outputAppValues | Add-Member -MemberType NoteProperty -Name secret_description -Value $secret.DisplayName
         }
 
         # store the secret value using One Time Secret API
-        New-OneTimeSecret -SecretValue $secret.Value -OutputObject $OutputObject
+        New-OneTimeSecret -SecretMessage $secret.SecretText -AppName $AppName
     }
 
-    catch
+    function New-AppRegistration
     {
-        Write-PSFMessage -Level Error -Message "Error creating client secret" -Target $App -Tag "Error" -ErrorRecord $_
-    }    
-}
+        [CmdletBinding()]
+        param (
+            [Parameter(Mandatory = $true)]
+            [string] $AppName
+        )
 
-function New-OneTimeSecret
-{
-    <#
-    .DESCRIPTION
-        Create a temporary secret using the One Time Secret API (https://onetimesecret.com), translated from cURL to PowerShell
-    #>
-
-    [CmdletBinding()]
-    param (
-        [Parameter(Mandatory)]
-        [string] $SecretValue,
-
-        [Parameter()]
-        [object] $OutputObject
-    )
-
-    try
-    {
-        # authentication username using encryption key file and secure string
-        $configFolderPath = "C:\Users\$env:UserName\Downloads\AzADAppRegistration\config"
-        $key = Get-Content (Join-Path -Path $configFolderPath -ChildPath "otsnu.key")
-        $un = Get-Content (Join-Path -Path $configFolderPath -ChildPath "otsnu.txt")
-        $secureString = $un | ConvertTo-SecureString -Key $key
-        $bstr = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureString)
-        $apiUsername = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto($bstr)
-    
-        # authentication password using encryption key file and secure string
-        $key = Get-Content (Join-Path -Path $configFolderPath -ChildPath "otswp.key")
-        $pw = Get-Content (Join-Path -Path $configFolderPath -ChildPath "otswp.txt")
-        $secureString = $pw | ConvertTo-SecureString -Key $key
-        $bstr = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureString)
-        $apiToken = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto($bstr)
-    }
-
-    catch
-    {
-        Write-PSFMessage -Level Error -Message "Error constructing authentication info for One Time Secret" -Target $App -Tag "Error" -ErrorRecord $_
-    }
-
-    # convert credentials into base64 and embed in the header
-    $base64AuthInfo = [System.Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes("$($apiUsername):$($apiToken)"))
-    $headers = @{
-        Authorization = ("Basic $base64AuthInfo")
-    }
-
-    # construct the request body with optional parameters
-    $body = @{
-        secret = $SecretValue
-        ttl = 604800
-    }
-
-    try
-    {
-        # send request to create secret and retrieve the URL that can be shared
-        $oneTimeSecret = Invoke-RestMethod -Method POST -Headers $headers -Body $body -Uri "https://onetimesecret.com/api/v1/share" 
-        $oneTimeSecretLink = "https://onetimesecret.com/secret/$($oneTimeSecret.secret_key)"
-        Write-PSFMessage -Level Host -Message "Successfully created One Time Secret with link `"$oneTimeSecretLink`"" -Target $App -Tag "Success"
-
-        # add to json output        
-        if ($OutputObject) {$OutputObject | Add-Member -MemberType NoteProperty -Name secret_value -Value $oneTimeSecretLink}
-    }
-
-    catch
-    {
-        Write-PSFMessage -Level Error -Message "Error creating One Time Secret" -Target $App -Tag "Error" -ErrorRecord $_
-    }
-}
-
-function Remove-Application
-{
-}
-
-foreach ($object in $inputFileObject.PSObject.Properties)
-{
-    switch ($object.Name)
-    {
-        New
+        begin
         {
-            $outputAppList = New-Object -TypeName PsObject
+            $requiredResourceAccess = @{
+                ResourceAppId = "00000003-0000-0000-c000-000000000000"
+                ResourceAccess = @(
 
-            foreach ($app in $inputFileObject.New.PsObject.Properties)
-            {           
-
-                # create app
-                $appDisplayName = $app.Name
-                $appPlatform = $app.Value.platform
-                if ($appPlatform -eq "web")
-                {
-                }
-                elseif ($appPlatform -eq "spa")
-                {
-                }
-                elseif ($appPlatform -eq "native")
-                {
-                    $appPublicClient = $true
-                }
-                $appReplyUrls = $app.Value.reply_urls
-                $appLogoutUrl = $app.Value.logout_url
-                $appAccessToken = $app.Value.access_token
-                $appIdToken = $app.Value.id_token
-                $appClientSecret = $app.Value.client_secret
-                $appOwners = $app.Value.owners
-
-                try
-                {
-                    $appRegistration = New-AzureADApplication -DisplayName $appDisplayName # -ReplyUrls $appReplyUrls
-                    Write-PSFMessage -Level Host -Message "Sucessfully created application `"$appDisplayName`" with object ID `"$($appRegistration.ObjectId)`"" -Tag "Success" -Target $appDisplayName
-                }
-                
-                catch
-                {
-                    Write-PSFMessage -Level Error -Message "Error creating application with display name `"$appDisplayName`"" -Tag "Error" -Target $appDisplayName -ErrorRecord $_ 
-                }
-
-                $appRegistrationObjectId = $appRegistration.ObjectId 
-                #$entApplication = New-AzureADServicePrincipal -DisplayName $AppDisplayName -AppId $appRegistration.AppId
-
-#region add application info to json output
-                $outputAppValues = [PsCustomObject]@{
-	                app_id = $appRegistration.AppId
-	                object_id = $appRegistration.ObjectId
-	                tenant_id = (Get-AzureAdTenantDetail).ObjectId
-                }
-#endregion
-
-#region add client secret
-                if ($appClientSecret -eq $true)
-                {
-                    Add-ClientSecret -App $appRegistrationObjectId -OutputObject $outputAppValues
-                }
-#endregion
-
-#region add application owners by object id
-                if ($appOwners -ne $null -and $appOwners -ne "")
-                {
-                    Add-ApplicationOwner -App $appRegistrationObjectId -Owners $appOwners -OutputObject $outputAppValues
-                }
-#endregion
-
-                $outputAppList | Add-Member -MemberType NoteProperty -Name $appRegistration.DisplayName -Value $outputAppValues             
+                    # User.Read
+                    @{
+                        Id = "e1fe6dd8-ba31-4d61-89e7-88639da4683d"
+                        Type = "Scope"
+                    }
+                )
             }
 
-            # add all created apps into json output file
-            $outputFileObject | Add-Member -MemberType NoteProperty -Name "New Applications" -Value $outputAppList
+            $signInAudience = "AzureADMyOrg"
         }
 
-        Remove
+        process
         {
-            $outputAppList = New-Object -TypeName PsObject
-
-            foreach ($appObjectId in $object.Value.object_id)
+            try
             {
-                try
-                {
-                    $app = Get-AzureADApplication -ObjectId $appObjectId
-                    Write-PSFMessage -Level Host -Message "Removing application `"$($app.DisplayName)`" with object ID `"$($app.ObjectId)`"" -Target $app
-
-                    Remove-AzureADApplication -ObjectId $app.ObjectID
-                }
-
-                catch [Microsoft.Open.AzureAD16.Client.ApiException]
-                {
-                    if ($_.Exception.Message.Contains("Request_ResourceNotFound"))
-                    {
-                        Write-Warning "Object ID not found: `"$appObjectId`""
-                    }
-
-                    elseif ($_.Exception.Message.Contains("Invalid object identifier"))
-                    {
-                        Write-Warning "Invalid object ID string: `"$appObjectId`""
-                    }
-
-                    else
-                    {
-                        $Error[0].Exception.GetType().fullname
-                    }
-                }
-            
-                catch
-                {
-                    $Error[0].Exception.GetType().fullname
-                }
-
-                $outputAppValues = [PsCustomObject]@{
-	                app_id = $app.AppId
-	                object_id = $app.ObjectId
-	                tenant_id = (Get-AzureAdTenantDetail).ObjectId
-                }
-
-                $outputAppList | Add-Member -MemberType NoteProperty -Name $app.DisplayName -Value $outputAppValues
+                $appRegistration = New-MgApplication -DisplayName $AppName -SignInAudience $signInAudience -RequiredResourceAccess $requiredResourceAccess
+                $appObjectId = $appRegistration.Id
+                Write-PSFMessage -Level Host -Message "Sucessfully created application `"$AppName`" with object ID `"$($appRegistration.Id)`"" -Tag "Success" -Target $AppName
             }
 
-            $outputFileObject | Add-Member -MemberType NoteProperty -Name "Removed Applications" -Value $outputAppList
-        }        
+            catch
+            {
+                Write-PSFMessage -Level Error -Message "Error creating application with display name `"$AppName`"" -Tag "Error" -Target $AppName -ErrorRecord $_ 
+            }
+
+            # add application info to json output
+            $outputAppValues = [PsCustomObject] @{
+                timestamp = (Get-Date).ToUniversalTime().ToString("yyyy-MM-dd HH:mm:ss +0")
+	            app_id = $appRegistration.AppId
+	            object_id = $appRegistration.Id
+	            tenant_id = (Get-MgOrganization).Id
+            }
+
+            return $appRegistration, $appObjectId, $outputAppValues
+        }
+    }
+
+    function New-OneTimeSecret
+    {
+        <#
+        .DESCRIPTION
+            Create a temporary secret using the One Time Secret API (https://onetimesecret.com), translated from cURL to PowerShell
+        #>
+
+        [CmdletBinding()]
+        param (
+            [Parameter(Mandatory)]
+            [string] $SecretMessage,
+
+            [Parameter()]
+            [string] $AppName
+        )
+
+        try
+        {
+            # authentication username using encryption key file and secure string
+            $configFolderPath = Join-Path -Path $folderPath -ChildPath "config"
+            $key = Get-Content (Join-Path -Path $configFolderPath -ChildPath "otsnu.key")
+            $un = Get-Content (Join-Path -Path $configFolderPath -ChildPath "otsnu.txt")
+            $secureString = $un | ConvertTo-SecureString -Key $key
+            $bstr = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureString)
+            $apiUsername = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto($bstr)
+    
+            # authentication password using encryption key file and secure string
+            $key = Get-Content (Join-Path -Path $configFolderPath -ChildPath "otswp.key")
+            $pw = Get-Content (Join-Path -Path $configFolderPath -ChildPath "otswp.txt")
+            $secureString = $pw | ConvertTo-SecureString -Key $key
+            $bstr = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureString)
+            $apiToken = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto($bstr)
+        }
+
+        catch
+        {
+            Write-PSFMessage -Level Error -Message "Error constructing authentication info for One Time Secret" -Target $AppName -Tag "Error" -ErrorRecord $_
+        }
+
+        # convert credentials into base64 and embed in header
+        $base64AuthInfo = [System.Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes("$($apiUsername):$($apiToken)"))
+        $headers = @{
+            Authorization = ("Basic $base64AuthInfo")
+        }
+
+        # construct the request body with optional parameters
+        $body = @{
+            secret = $SecretMessage
+            ttl = 604800
+        }
+
+        try
+        {
+            # send request to create secret and retrieve the share URL
+            $oneTimeSecret = Invoke-RestMethod -Method POST -Headers $headers -Body $body -Uri "https://onetimesecret.com/api/v1/share" 
+            $oneTimeSecretUrl = "https://onetimesecret.com/secret/$($oneTimeSecret.secret_key)"
+            Write-PSFMessage -Level Host -Message "Successfully created One Time Secret with URL `"$oneTimeSecretUrl`"" -Target $AppName -Tag "Success"
+
+            # add to json output        
+            if ($outputAppValues) {$outputAppValues | Add-Member -MemberType NoteProperty -Name secret_value -Value $oneTimeSecretUrl}
+        }
+
+        catch
+        {
+            Write-PSFMessage -Level Error -Message "Error creating One Time Secret" -Target $AppName -Tag "Error" -ErrorRecord $_
+        }
     }
 }
 
-$outputFileObject | ConvertTo-Json -Depth 5 | Out-File $outputFilePath -Append
+process
+{
+    # create app registration
+    $appRegistration, $appObjectId, $outputAppValues = New-AppRegistration -AppName $AppName
+
+    # create enterprise application/service principal
+    $enterpriseApplication = New-MgServicePrincipal -AppId $appRegistration.AppId -Tags @("HideApp", "WindowsAzureActiveDirectoryIntegratedApp")   
+
+    # add application owners by object id
+    if ($Script:PSBoundParameters["AppRegistrationOwners"])
+    {
+        Add-ApplicationOwner -AppObjectId $appObjectId -AppName $AppName -OwnerList $AppRegistrationOwners
+    }
+
+    # add client secret
+    if ($Script:PSBoundParameters["ClientSecret"])
+    {
+        Add-ClientSecret -AppObjectId $appObjectId -AppName $AppName
+    }
+
+    $outputFileObject = New-Object -TypeName PsObject
+    $outputFileObject | Add-Member -MemberType NoteProperty -Name $appRegistration.DisplayName -Value $outputAppValues
+    $outputFileObject | ConvertTo-Json -Depth 5 | Out-File $outputFilePath -Append
+}
