@@ -18,22 +18,26 @@ param (
     [parameter(Mandatory = $false)]
     [ValidateNotNullOrEmpty()]
     [string] $FolderPath = $PSScriptRoot,
-    
-    [parameter(Mandatory = $false)]
-    [ValidateNotNullOrEmpty()]
-    [string] $ConfigFolderPath = (Join-Path -Path $PSScriptRoot -ChildPath "Config"),
-    
+       
     [parameter(Mandatory = $false)]
     [ValidateNotNullOrEmpty()]
     [string] $ConfigFile = "config.json",
     
     [parameter(Mandatory = $false)]
     [ValidateNotNullOrEmpty()]
-    [string] $OutputFile = "New-AADApplication-Output-AppInfo.json",
+    [string] $OutputFile = "New-AADApplication-Output-$(Get-Date -f 'yyyy-MM-dd')-AppInfo.json",
     
     [parameter(Mandatory = $false)]
     [ValidateNotNullOrEmpty()]
-    [string] $LogFile = "New-AADApplication-Log-$(Get-Date -f 'yyyy-MM-dd').log"
+    [string] $LogFile = "New-AADApplication-Output-$(Get-Date -f 'yyyy-MM-dd')-Log.log",
+    
+    [parameter(Mandatory = $false)]
+	[ValidateSet("Automation", "Manual")]
+    [string] $ScriptMode = "Automation",
+    
+    [parameter(Mandatory = $false)]
+	[ValidateSet("AzureLogAnalytics", "LogFile, Both")]
+    [string] $PSFLogProvider = "AzureLogAnalytics"
 )
 
 begin
@@ -41,44 +45,125 @@ begin
     try
     {
 
-        # construct file paths
-        $configFilePath = Join-Path -Path $ConfigFolderPath -ChildPath $ConfigFile
-        $outputFilePath = Join-Path -Path $FolderPath -ChildPath $OutputFile
-        $logFilePath = Join-Path -Path (Join-Path -Path $FolderPath -ChildPath "Logs") -ChildPath $LogFile
-
-        # PsFramework logging
-        if (-not (Get-Module -ListAvailable -Name PsFramework))
-        {
-            Install-Module -Name PsFramework -Scope CurrentUser -Force
-        }
-
-        Set-PSFLoggingProvider -Name LogFile -Enabled $true -FilePath $logFilePath -FileType "CSV" -UTC $true
-
-        # establish connection to AAD
-        try
-        {
-            $var = Get-MgOrganization -ErrorAction Stop
-        }
-     
-        catch [System.Security.Authentication.AuthenticationException]
-        {
-            # Disconnect-MgGraph -ErrorAction SilentlyContinue
-
-            $configFileObject = Get-Content -Path $configFilePath -Raw | ConvertFrom-Json 
+        #region Set script variables from Azure Automation variables or configuration file
+            switch ($ScriptMode)
+            {
+                "Automation"
+                {
+                    $tenant_id = (Get-AutomationVariable -Name 'tenant_id')
+                    $client_id = (Get-AutomationVariable -Name 'client_id')
+                    $client_secret = (Get-AutomationVariable -Name 'client_secret')
             
-            $uri = "https://login.microsoftonline.com/$($configFileObject.app_properties.tenant_id)/oauth2/v2.0/token"
-            $body =  @{
-                grant_type    = "client_credentials"
-                scope         = "https://graph.microsoft.com/.default"
-                client_id     = $configFileObject.app_properties.app_id
-                client_secret = $configFileObject.app_properties.client_secret
+                    $log_workspace_id = (Get-AutomationVariable -Name 'workspace_id')
+                    $log_shared_key = (Get-AutomationVariable -Name 'shared_key')
+
+                    $ots_Username = (Get-AutomationVariable -Name 'ots_username')
+                    $ots_Token = (Get-AutomationVariable -Name 'ots_token')
+                }
+
+                "Manual"
+                {
+                    $configFolderPath = Join-Path -Path $FolderPath -ChildPath "Config"
+                    $configFilePath = Join-Path -Path $configFolderPath -ChildPath $ConfigFile
+                    $configFileObject = Get-Content -Path $configFilePath -Raw | ConvertFrom-Json
+
+                    $tenant_id = $configFileObject.app_properties.tenant_id
+                    $client_id = $configFileObject.app_properties.app_id
+                    $client_secret = $configFileObject.app_properties.client_secret
+            
+                    $log_workspace_id = $configFileObject.log_analytics.workspace_id
+                    $log_shared_key = $configFileObject.log_analytics.shared_key
+
+                    $ots_Username = $configFileObject.one_time_secret.username
+                    $ots_Token = $configFileObject.one_time_secret.token
+                }
             }
+        #endregion
+
+        #region Configure PsFramework logging
+            if (-not (Get-Module -ListAvailable -Name PsFramework) )
+            {
+                Install-Module -Name PsFramework -Scope CurrentUser -Force
+            }
+
+            switch ($PSFLogProvider)
+            {
+                "AzureLogAnalytics"
+                {
+                    $params = @{
+                        Enabled     = $true
+                        LogType     = "PSFLogging"
+                        Name        = $PSFLogProvider
+                        SharedKey   = $log_shared_key
+                        WorkspaceId = $log_workspace_id
+                    }
+                }
+
+                "LogFile"
+                {
+                    $params = @{
+                        Enabled  = $true
+                        FilePath = Join-Path -Path (Join-Path -Path $FolderPath -ChildPath "Logs") -ChildPath $LogFile
+                        FileType = "CSV"
+                        Name     = $PSFLogProvider
+                        UTC      = $true
+                    }
+                }
+
+                "Both"
+                {
+                    $paramsAzureLogAnalytics = @{
+                        Enabled     = $true
+                        LogType     = "PSFLogging"
+                        Name        = $PSFLogProvider
+                        SharedKey   = $log_shared_key
+                        WorkspaceId = $log_workspace_id
+                    }
+
+                    $paramsLogFile = @{
+                        Enabled  = $true
+                        FilePath = Join-Path -Path (Join-Path -Path $FolderPath -ChildPath "Logs") -ChildPath $LogFile
+                        FileType = "CSV"
+                        Name     = $PSFLogProvider
+                        UTC      = $true
+                    }
+
+                }
+            }
+
+            Set-PSFLoggingProvider @params
+            Write-PSFMessage -Level Host -Message "Set PSFramework logging provider to `"$($PSFLogProvider)`"" -Target $AppName
+        #endregion
+
+        #region Obtain access token to connect to MS Graph
+            try
+            {
+                Disconnect-MgGraph
+            }
+
+            catch
+            {
+            }
+
+            finally
+            {
+                $params = @{                
+                    Uri    = "https://login.microsoftonline.com/$($tenant_id)/oauth2/v2.0/token"
+                    Method = "POST"
+                    Body   = @{
+	                    client_id     = $client_id
+	                    client_secret = $client_secret
+                        grant_type    = "client_credentials"
+                        scope         = "https://graph.microsoft.com/.default"
+                    }
+                }
  
-            $connection = Invoke-RestMethod -Uri $uri -Method POST -Body $body 
-            $token = $connection.access_token
- 
-            Connect-MgGraph -AccessToken $token
-        }
+                $connection = Invoke-RestMethod @params
+                $token_expires = (Get-Date).AddSeconds($connection.expires_in)
+                $graph = Connect-MgGraph -AccessToken $connection.access_token
+                Write-PSFMessage -Level Host -Message "Obtained access token with validity until $token_expires" -Target $AppName
+            }
+        #endregion
     }
 
     catch
@@ -268,15 +353,69 @@ begin
             Write-PSFMessage -Level Error -Message "Error creating client secret" -Target $AppName -Tag "Error" -ErrorRecord $_
         }
 
+        # store the secret value using One Time Secret API
+        $oneTimeSecret = New-OneTimeSecret -SecretMessage $secret.SecretText -AppName $AppName
+
         # add to json output        
         if ($outputAppValues)
         {
-            $outputAppValues | Add-Member -MemberType NoteProperty -Name secret_id -Value $secret.KeyId
-            $outputAppValues | Add-Member -MemberType NoteProperty -Name secret_description -Value $secret.DisplayName
-        }
+            $secret = [PSCustomObject] @{
+                secret_id = $secret.KeyId
+                secret_description = $secret.DisplayName
+                secret_value = "https://onetimesecret.com/secret/$($oneTimeSecret.secret_key)"
+            }
 
-        # store the secret value using One Time Secret API
-        New-OneTimeSecret -SecretMessage $secret.SecretText -AppName $AppName
+            $outputAppValues | Add-Member -MemberType NoteProperty -Name client_secret -Value $secret
+        }
+    }
+
+    function Build-Signature 
+    {
+        <#
+        .SYNOPSIS
+            Function to create authorization signature for posting to Azure Log Analytics
+
+        .NOTES
+            # Taken from https://docs.microsoft.com/en-us/azure/log-analytics/log-analytics-data-collector-api
+        #>
+
+        [CmdletBinding()]
+        param (
+            [parameter(Mandatory = $true)]
+            [string] $customerId,
+
+            [parameter(Mandatory = $true)]
+            [string] $sharedKey,
+
+            [parameter(Mandatory = $true)]
+            [string] $date,
+
+            [parameter(Mandatory = $true)]
+            [string] $contentLength,
+
+            [parameter(Mandatory = $true)]
+            [string] $method,
+
+            [parameter(Mandatory = $true)]
+            [string] $contentType,
+
+            [parameter(Mandatory = $true)]
+            [string] $resource
+        )
+
+        $xHeaders = "x-ms-date:" + $date
+        $stringToHash = $method + "`n" + $contentLength + "`n" + $contentType + "`n" + $xHeaders + "`n" + $resource
+
+        $bytesToHash = [Text.Encoding]::UTF8.GetBytes($stringToHash)
+        $keyBytes = [Convert]::FromBase64String($sharedKey)
+
+        $sha256 = New-Object System.Security.Cryptography.HMACSHA256
+        $sha256.Key = $keyBytes
+        $calculatedHash = $sha256.ComputeHash($bytesToHash)
+        $encodedHash = [Convert]::ToBase64String($calculatedHash)
+        $authorization = 'SharedKey {0}:{1}' -f $customerId, $encodedHash
+
+        return $authorization
     }
 
     function New-AppRegistration
@@ -301,14 +440,18 @@ begin
                 )
             }
 
-            $signInAudience = "AzureADMyOrg"
+            $params = @{
+                DisplayName = $AppName
+                SignInAudience = "AzureADMyOrg"
+                RequiredResourceAccess = $requiredResourceAccess
+            }
         }
 
         process
         {
             try
             {
-                $appRegistration = New-MgApplication -DisplayName $AppName -SignInAudience $signInAudience -RequiredResourceAccess $requiredResourceAccess
+                $appRegistration = New-MgApplication @params
                 $appObjectId = $appRegistration.Id
                 Write-PSFMessage -Level Host -Message "Sucessfully created application `"$AppName`" with object ID `"$($appRegistration.Id)`"" -Tag "Success" -Target $AppName
             }
@@ -320,10 +463,12 @@ begin
 
             # add application info to json output
             $outputAppValues = [PsCustomObject] @{
-                timestamp = (Get-Date).ToUniversalTime().ToString("yyyy-MM-dd HH:mm:ss +0")
-	            app_id = $appRegistration.AppId
-	            object_id = $appRegistration.Id
-	            tenant_id = (Get-MgOrganization).Id
+                time_created = (Get-Date).ToUniversalTime().ToString("yyyy-MM-dd HH:mm:ss +0")
+	            tenant_name  = (Get-MgOrganization).DisplayName
+	            tenant_id    = (Get-MgOrganization).Id
+                app_name     = $appRegistration.DisplayName
+	            app_id       = $appRegistration.AppId
+	            object_id    = $appRegistration.Id
             }
 
             return $appRegistration, $appObjectId, $outputAppValues
@@ -346,31 +491,8 @@ begin
             [string] $AppName
         )
 
-        try
-        {
-            # authentication username using encryption key file and secure string
-            $configFolderPath = Join-Path -Path $folderPath -ChildPath "config"
-            $key = Get-Content (Join-Path -Path $configFolderPath -ChildPath "otsnu.key")
-            $un = Get-Content (Join-Path -Path $configFolderPath -ChildPath "otsnu.txt")
-            $secureString = $un | ConvertTo-SecureString -Key $key
-            $bstr = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureString)
-            $apiUsername = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto($bstr)
-    
-            # authentication password using encryption key file and secure string
-            $key = Get-Content (Join-Path -Path $configFolderPath -ChildPath "otswp.key")
-            $pw = Get-Content (Join-Path -Path $configFolderPath -ChildPath "otswp.txt")
-            $secureString = $pw | ConvertTo-SecureString -Key $key
-            $bstr = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureString)
-            $apiToken = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto($bstr)
-        }
-
-        catch
-        {
-            Write-PSFMessage -Level Error -Message "Error constructing authentication info for One Time Secret" -Target $AppName -Tag "Error" -ErrorRecord $_
-        }
-
         # convert credentials into base64 and embed in header
-        $base64AuthInfo = [System.Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes("$($apiUsername):$($apiToken)"))
+        $base64AuthInfo = [System.Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes("$($ots_Username):$($ots_Token)"))
         $headers = @{
             Authorization = ("Basic $base64AuthInfo")
         }
@@ -388,14 +510,69 @@ begin
             $oneTimeSecretUrl = "https://onetimesecret.com/secret/$($oneTimeSecret.secret_key)"
             Write-PSFMessage -Level Host -Message "Successfully created One Time Secret with URL `"$oneTimeSecretUrl`"" -Target $AppName -Tag "Success"
 
-            # add to json output        
-            if ($outputAppValues) {$outputAppValues | Add-Member -MemberType NoteProperty -Name secret_value -Value $oneTimeSecretUrl}
+            return $oneTimeSecret
         }
 
         catch
         {
             Write-PSFMessage -Level Error -Message "Error creating One Time Secret" -Target $AppName -Tag "Error" -ErrorRecord $_
         }
+    }
+
+    function Post-LogAnalyticsData
+    {
+        <#
+        .SYNOPSIS
+            Function to create and post request to Azure Log Analytics
+
+        .NOTES
+            # Taken from https://docs.microsoft.com/en-us/azure/log-analytics/log-analytics-data-collector-api
+        #>
+
+        [CmdletBinding()]
+        param (
+            [parameter(Mandatory = $true)]
+            [string] $CustomerId,
+
+            [parameter(Mandatory = $true)]
+            [string] $SharedKey,
+
+            [parameter(Mandatory = $true)]
+            $Body,
+
+            [parameter(Mandatory = $true)]
+            [string] $LogType
+        )
+
+        $method = "POST"
+        $contentType = "application/json"
+        $resource = "/api/logs"
+        $rfc1123date = [DateTime]::UtcNow.ToString("r")
+        $contentLength = $Body.Length
+
+	    $signatureArgs = @{
+		    customerId	    = $CustomerId
+		    sharedKey	    = $SharedKey
+		    date	        = $rfc1123date
+		    contentLength   = $contentLength
+		    method	        = $method
+		    contentType     = $contentType
+		    resource        = $resource
+	    }
+
+        $signature = Build-Signature @signatureArgs
+
+        $uri = "https://" + $CustomerId + ".ods.opinsights.azure.com" + $resource + "?api-version=2016-04-01"
+
+        $headers = @{
+            "Authorization"        = $signature;
+            "Log-Type"             = $LogType;
+            "x-ms-date"            = $rfc1123date;
+            #"time-generated-field" = $TimeStampField;
+        }
+
+        $response = Invoke-WebRequest -Uri $uri -Method $method -ContentType $contentType -Headers $headers -Body $Body -UseBasicParsing
+        return $response.StatusCode
     }
 }
 
@@ -419,7 +596,32 @@ process
         Add-ClientSecret -AppObjectId $appObjectId -AppName $AppName
     }
 
-    $outputFileObject = New-Object -TypeName PsObject
-    $outputFileObject | Add-Member -MemberType NoteProperty -Name $appRegistration.DisplayName -Value $outputAppValues
-    $outputFileObject | ConvertTo-Json -Depth 5 | Out-File $outputFilePath -Append
+    switch ($PSFLogProvider)
+    {
+        "AzureLogAnalytics"
+        {
+        	$params = @{
+		        CustomerId = $log_workspace_id
+		        SharedKey  = $log_shared_key
+		        Body       = $outputAppValues | ConvertTo-Json
+		        LogType    = "AppProperties"
+	        }
+
+            $response = Post-LogAnalyticsData @params
+        }
+
+        "LogFile"
+        {
+            # construct file paths
+            $outputFilePath = Join-Path -Path $FolderPath -ChildPath $OutputFile
+            $outputFileObject = New-Object -TypeName PsObject
+            $outputFileObject | Add-Member -MemberType NoteProperty -Name $appRegistration.DisplayName -Value $outputAppValues
+            $outputFileObject | ConvertTo-Json -Depth 5 | Out-File $outputFilePath -Append
+        }
+    }
+}
+
+end
+{
+    Disconnect-MgGraph
 }
