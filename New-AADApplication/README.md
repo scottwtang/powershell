@@ -8,7 +8,7 @@ The script is designed to be run from Azure Automation, but can also be run loca
 
 ### Logging
 
-The script leverages the [PSFramework] module for logging, and is configured to use either Azure Log Analytics or a CSV log file.
+The script leverages the [PSFramework] module for logging, and is configured to use either Azure Log Analytics and/or a CSV log file.
 
 Further documentation to be added
 
