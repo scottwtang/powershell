@@ -12,6 +12,15 @@ param (
     [bool] $ClientSecret,
     
     [parameter(Mandatory = $false)]
+    [bool] $AccessToken,
+    
+    [parameter(Mandatory = $false)]
+    [bool] $IdToken,
+    
+    [parameter(Mandatory = $false)]
+    $ApiPermissions,
+    
+    [parameter(Mandatory = $false)]
     [ValidateNotNullOrEmpty()]
     [string] $OwnersDirectoryRole,
     
@@ -36,6 +45,7 @@ param (
     [string] $ScriptMode = "Automation",
     
     [parameter(Mandatory = $false)]
+    [ValidateSet("AzureLogAnalytics", "LogFile", "AzureLogAnalytics;LogFile", "LogFile;AzureLogAnalytics")]
     $PSFLogProvider = "AzureLogAnalytics"
 )
 
@@ -479,6 +489,163 @@ function Post-LogAnalyticsData
     return $response.StatusCode
 }
 
+function Update-AccessTokenIssuance
+{
+    [cmdletBinding()]
+    param (
+        [parameter(Mandatory = $true)]
+        [string] $AppObjectId,
+        
+        [parameter(Mandatory = $true)]
+        [bool] $Enabled,
+
+        [parameter()]
+        [string] $AppName
+    )
+
+    $params = @{
+        Web = @{
+            ImplicitGrantSettings = @{
+                EnableAccessTokenIssuance = $Enabled
+            }
+        }
+    }
+
+    try
+    {
+        Update-MgApplication -ApplicationId $AppObjectId @params -ErrorAction Stop
+        Write-PSFMessage -Level Verbose -Message "Setting access token issuance to: $Enabled" -Target $AppName -Tag "Success"
+    }
+
+    catch
+    {
+        Write-PSFMessage -Level Error -Message "Error setting access token issuance" -Target $AppName -Tag "Error" -ErrorRecord $_
+    }
+
+    # add to json output        
+    if ($outputAppValues)
+    {
+        $outputAppValues | Add-Member -MemberType NoteProperty -Name access_token -Value $Enabled
+    }
+}
+
+function Update-IdTokenIssuance
+{
+    [cmdletBinding()]
+    param (
+        [parameter(Mandatory = $true)]
+        [string] $AppObjectId,
+        
+        [parameter(Mandatory = $true)]
+        [bool] $Enabled,
+
+        [parameter()]
+        [string] $AppName
+    )
+
+    $params = @{
+        Web = @{
+            ImplicitGrantSettings = @{
+                EnableIdTokenIssuance = $Enabled
+            }
+        }
+    }
+
+    try
+    {
+        Update-MgApplication -ApplicationId $AppObjectId @params -ErrorAction Stop
+        Write-PSFMessage -Level Verbose -Message "Setting ID token issuance to: $Enabled" -Target $AppName -Tag "Success"
+    }
+
+    catch
+    {
+        Write-PSFMessage -Level Error -Message "Error setting ID token issuance" -Target $AppName -Tag "Error" -ErrorRecord $_
+    }
+
+    # add to json output        
+    if ($outputAppValues)
+    {
+        $outputAppValues | Add-Member -MemberType NoteProperty -Name id_token -Value $Enabled
+    }
+}
+
+function Update-MSGraphAccess
+{
+    [cmdletBinding()]
+    param (
+        [parameter(Mandatory = $true)]
+        [string] $AppObjectId,
+        
+        [parameter(Mandatory = $false)]
+        [string]$resourceAppId = "00000003-0000-0000-c000-000000000000",
+
+        [parameter(Mandatory = $true)]
+        $resourceAccessList,
+        
+        [parameter(Mandatory = $false)]
+        [string] $AppName
+    )
+    
+    foreach ($permission in $resourceAccessList)
+    {
+        try
+        {
+            $permissionId = (Find-MgGraphPermission $permission.PermissionName -PermissionType $permission.PermissionType -ExactMatch -ErrorAction Stop).Id
+            Write-PSFMessage -Level Verbose -Message "Retrieved permission ID `"$($permissionID)`" for permission `"$($permission.PermissionName)`" of type `"$($permission.PermissionType)`"" -Target $AppName -Tag "Success"
+        }
+
+        catch
+        {
+            Write-PSFMessage -Level Error -Message "Error retrieving permission ID for permission `"$($permission.PermissionName)`" of type `"$($permission.PermissionType)`"" -Target $AppName -Tag "Error" -ErrorRecord $_
+        }
+
+        switch ($permission.PermissionType)
+        {
+            "Application"
+            {
+                $permissionType = "Role"
+            }
+
+            "Delegated"
+            {
+                $permissionType = "Scope"
+            }
+        }
+        
+        $params = @{
+            ResourceAppId = $resourceAppId
+            ResourceAccess = @(
+                @{
+                    Id   = $permissionId
+                    Type = $permissionType
+                }
+            )
+        }       
+
+        $app = (Get-MgApplication -ApplicationId $AppObjectId)
+        $params.ResourceAccess += $app.RequiredResourceAccess.ResourceAccess
+
+        try
+        {
+            Update-MgApplication -ApplicationId $AppObjectId -RequiredResourceAccess $params
+            Write-PSFMessage -Level Verbose -Message "Successfully added permission `"$($permission.PermissionName)`"" -Target $AppName -Tag "Success"
+        }
+
+        catch
+        {
+            Write-PSFMessage -Level Error -Message "Error adding permission `"$($permission.PermissionName)`"" -Target $AppName -Tag "Error" -ErrorRecord $_
+        }
+    }
+
+    # get the full list of permissions and add to json output    
+    if ($outputAppValues)
+    {
+        $resourceAccessList = (Get-MgApplication -ApplicationId $AppObjectId).RequiredResourceAccess.ResourceAccess
+
+        $outputAppValues | Add-Member -MemberType NoteProperty -Name resource_access -Value $resourceAccessList
+    }
+}
+
 #region begin
     try
     {
@@ -616,6 +783,21 @@ function Output-AppProperties
 
     # create enterprise application/service principal
     $enterpriseApplication = New-MgServicePrincipal -AppId $appRegistration.AppId -Tags @("HideApp", "WindowsAzureActiveDirectoryIntegratedApp")   
+
+    if ($AccessToken)
+    {
+        Update-AccessTokenIssuance -AppObjectId $appObjectId -AppName $AppName -Enabled $AccessToken
+    }
+
+    if ($IdToken)
+    {
+        Update-IdTokenIssuance -AppObjectId $appObjectId -AppName $AppName -Enabled $IdToken
+    }
+
+    if ($ApiPermissions)
+    {
+        Update-MSGraphAccess -AppObjectId $appObjectId -ResourceAccessList $ApiPermissions -AppName $AppName
+    }
 
     # add application owners by object id
     if ($AppRegistrationOwners)
