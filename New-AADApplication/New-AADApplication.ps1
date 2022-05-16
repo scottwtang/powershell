@@ -25,6 +25,9 @@ param (
     
     [parameter(Mandatory = $false)]
     [bool] $ApiPermissionsGrantConsent = $true,
+        
+    [parameter(Mandatory = $false)]
+    [object[]] $AppRoles,
     
     [parameter(Mandatory = $false)]
     [ValidateNotNullOrEmpty()]
@@ -54,7 +57,6 @@ param (
     [ValidateSet("AzureLogAnalytics", "LogFile", "AzureLogAnalytics;LogFile", "LogFile;AzureLogAnalytics")]
     $PSFLogProvider = "AzureLogAnalytics"
 )
-
 
 function Add-AADRole
 {
@@ -339,6 +341,63 @@ function New-AppRegistration
         }
 
         return $appRegistration, $appObjectId, $outputAppValues
+    }
+}
+
+function New-AppRoles
+{
+    [CmdletBinding()]
+    param (
+        [Parameter(Mandatory = $true)]
+        [ValidateNotNullOrEmpty()]
+        [guid] $AppObjectId,
+        
+        [Parameter(Mandatory = $true)]
+        [ValidateNotNullOrEmpty()]
+        [object[]] $AppRoles
+    )
+
+    foreach ($role in $AppRoles)
+    {
+
+        # Add default properties to each app role
+        $role.Add("Id", (New-Guid).Guid)
+        $role.Add("IsEnabled", $true)
+
+        $newRoles = @($role)
+    
+        try
+        {
+        
+            # Get the existing app roles and combine with new role
+            $existingAppRoles = (Get-MgApplication -ApplicationId $AppObjectId).AppRoles
+            $newRoles += ($existingAppRoles)
+        
+            # Update the application with new app roles
+            Update-MgApplication -ApplicationId $AppObjectId -AppRoles $newRoles -ErrorAction Stop
+            Write-PSFMessage -Level Verbose -Message "Successfully added new app role `"$($role.DisplayName)`"" -Target $AppObjectId
+        }
+
+        catch
+        {
+            if ($_.Exception.Message -eq "Request contains a property with duplicate values.")
+            {                
+                $duplicateRole = ((Get-MgApplication -ApplicationId $AppObjectId).AppRoles | Where-Object {$_.Value -eq $role.Value}).DisplayName
+                Write-PSFMessage -Level Error -Message "Error adding new app role `"$($role.DisplayName)`" | App role value `"$($role.Value)`" already used in existing role `"$($duplicateRole)`"" -Target $AppObjectId -Tag "Error"
+            }
+
+            else
+            {
+                Write-PSFMessage -Level Error -Message "Error adding app role `"$($role.DisplayName)`"" -Target $AppObjectId -Tag "Error" -ErrorRecord $_
+            }
+        }
+    }
+
+    # Add to json output    
+    if ($outputAppValues)
+    {
+        $appRoles = (Get-MgApplication -ApplicationId $AppObjectId).AppRoles
+        $outputAppValues | Add-Member -MemberType NoteProperty -Name app_roles -Value $appRoles
     }
 }
 
@@ -901,6 +960,11 @@ function Output-AppProperties
     if ($ApiPermissionsGrantConsent)
     {
         Update-ResourceAccessAdminConsent -AppObjectId $appObjectId -ResourceAccessList $ApiPermissions
+    }
+
+    if ($AppRoles)
+    {
+        New-AppRoles -AppObjectId $appObjectId -AppRoles $AppRoles
     }
 
     # add application owners by object id
