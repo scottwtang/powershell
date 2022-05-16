@@ -18,7 +18,13 @@ param (
     [bool] $IdToken,
     
     [parameter(Mandatory = $false)]
+    [bool] $Visible = $false,
+    
+    [parameter(Mandatory = $false)]
     $ApiPermissions,
+    
+    [parameter(Mandatory = $false)]
+    [bool] $ApiPermissionsGrantConsent = $true,
     
     [parameter(Mandatory = $false)]
     [ValidateNotNullOrEmpty()]
@@ -123,38 +129,33 @@ function Add-AADRole
 
 function Add-ApplicationOwner
 {
-    <#
-    .DESCRIPTION
-    #>
-
     [CmdletBinding()]
     param (
         [Parameter(Mandatory = $true)]
-        [string] $AppObjectId,
-
-        [Parameter()]
-        [string] $AppName,
-
+        [ValidateNotNullOrEmpty()]
+        [guid] $AppObjectId,
+        
         [Parameter(Mandatory = $true)]
-        $OwnerList
+        [ValidateNotNullOrEmpty()]
+        [string[]] $OwnerList
     )
 
     $OwnerList = $OwnerList.Split(";")
     foreach ($owner in $OwnerList)
     {
 
-        # validate the given user exists
+        # Validate the given user exists
         try
         {
             $ownerObjectId = (Get-MgUser -UserId $owner -ErrorAction Stop).Id
-            Write-PSFMessage -Level Verbose -Message "Retrieved user `"$owner`" with object ID `"$ownerObjectId`"" -Target $AppName
+            Write-PSFMessage -Level Verbose -Message "Retrieved user `"$owner`" with object ID `"$ownerObjectId`"" -Target $AppObjectId
         }
         catch
         {
-            Write-PSFMessage -Level Error -Message "Error retrieving object `"$owner`"" -Target $AppName -Tag "Error" -ErrorRecord $_
+            Write-PSFMessage -Level Error -Message "Error retrieving object `"$owner`"" -Target $AppObjectId -Tag "Error" -ErrorRecord $_
         }
             
-        # assign the owner to the application
+        # Assign the owner to the application
         try
         {
             $body = @{
@@ -162,29 +163,24 @@ function Add-ApplicationOwner
             }
 
             New-MgApplicationOwnerByRef -ApplicationId $AppObjectId -BodyParameter $body -ErrorAction Stop
-            Write-PSFMessage -Level Verbose -Message "Successfully added app registration owner `"$owner`"" -Target $AppName -Tag "Success"
+            Write-PSFMessage -Level Verbose -Message "Successfully added app registration owner `"$owner`"" -Target $AppObjectId -Tag "Success"
         }
 
         catch
         {
             if ($_.Exception.Message -eq "One or more added object references already exist for the following modified properties: 'owners'.")
             {
-                Write-PSFMessage -Level Error -Message "User `"$owner`" already assigned as app registration owner" -Target $AppName -Tag "Error" -ErrorRecord $_
+                Write-PSFMessage -Level Error -Message "User `"$owner`" already assigned as app registration owner" -Target $AppObjectId -Tag "Error" -ErrorRecord $_
             }
 
             else
             {
-                Write-PSFMessage -Level Error -Message "Error adding owner `"$owner`"" -Target $AppName -Tag "Error" -ErrorRecord $_
+                Write-PSFMessage -Level Error -Message "Error adding owner `"$owner`"" -Target $AppObjectId -Tag "Error" -ErrorRecord $_
             }
-        }
-
-        if ($OwnersDirectoryRole)
-        {
-            Add-AADRole -User $owner -RoleName $OwnersDirectoryRole
         }
     }
 
-    # get the full list of owners and add to json output    
+    # Get the full list of owners and add to json output    
     if ($outputAppValues)
     {
         $owners = (Get-MgApplicationOwner -ApplicationId $AppObjectId) | ForEach-Object { 
@@ -204,34 +200,36 @@ function Add-ClientSecret
     [CmdletBinding()]
     param (
         [Parameter(Mandatory = $true)]
-        [string] $AppObjectId,
-
-        [Parameter()]
-        [string] $AppName
+        [ValidateNotNullOrEmpty()]
+        [guid] $AppObjectId,
+        
+        [Parameter(Mandatory = $false)]
+        [ValidateNotNullOrEmpty()]
+        [int] $SecretLifetimeMonths = 24
     )
        
     try
     {
 
-        # set client secret properties with the timestamp as description, and a lifetime of 2 years
-        $body = @{
+        # Set the client secret properties such as description and lifetime
+        $params = @{
             DisplayName = "Uploaded on $(Get-Date -Format `"yyyy-MM-dd HH:mm:ss`")"
             StartDateTime = Get-Date
-            EndDateTime = (Get-Date).AddMonths(24)
+            EndDateTime = (Get-Date).AddMonths($SecretLifetimeMonths)
         }
         
-        # create client secret
-        $secret = Add-MgApplicationPassword -Application $AppObjectId -PasswordCredential $body -ErrorAction Stop       
-        Write-PSFMessage -Level Verbose -Message "Successfully created client secret" -Target $AppName -Tag "Success"        
+        # Create client secret
+        $secret = Add-MgApplicationPassword -Application $AppObjectId -PasswordCredential $params -ErrorAction Stop
+        Write-PSFMessage -Level Verbose -Message "Successfully created client secret" -Target $AppObjectId -Tag "Success"
     }
 
     catch
     {
-        Write-PSFMessage -Level Error -Message "Error creating client secret" -Target $AppName -Tag "Error" -ErrorRecord $_
+        Write-PSFMessage -Level Error -Message "Error creating client secret" -Target $AppObjectId -Tag "Error" -ErrorRecord $_
     }
 
-    # store the secret value using One Time Secret API
-    $oneTimeSecret = New-OneTimeSecret -SecretMessage $secret.SecretText -AppName $AppName
+    # Store the secret value using One Time Secret API
+    $oneTimeSecret = New-OneTimeSecret -SecretMessage $secret.SecretText
 
     # add to json output        
     if ($outputAppValues)
@@ -246,60 +244,11 @@ function Add-ClientSecret
     }
 }
 
-function Build-Signature 
-{
-    <#
-    .SYNOPSIS
-        Function to create authorization signature for posting to Azure Log Analytics
-
-    .NOTES
-        # Taken from https://docs.microsoft.com/en-us/azure/log-analytics/log-analytics-data-collector-api
-    #>
-
-    [CmdletBinding()]
-    param (
-        [parameter(Mandatory = $true)]
-        [string] $customerId,
-
-        [parameter(Mandatory = $true)]
-        [string] $sharedKey,
-
-        [parameter(Mandatory = $true)]
-        [string] $date,
-
-        [parameter(Mandatory = $true)]
-        [string] $contentLength,
-
-        [parameter(Mandatory = $true)]
-        [string] $method,
-
-        [parameter(Mandatory = $true)]
-        [string] $contentType,
-
-        [parameter(Mandatory = $true)]
-        [string] $resource
-    )
-
-    $xHeaders = "x-ms-date:" + $date
-    $stringToHash = $method + "`n" + $contentLength + "`n" + $contentType + "`n" + $xHeaders + "`n" + $resource
-
-    $bytesToHash = [Text.Encoding]::UTF8.GetBytes($stringToHash)
-    $keyBytes = [Convert]::FromBase64String($sharedKey)
-
-    $sha256 = New-Object System.Security.Cryptography.HMACSHA256
-    $sha256.Key = $keyBytes
-    $calculatedHash = $sha256.ComputeHash($bytesToHash)
-    $encodedHash = [Convert]::ToBase64String($calculatedHash)
-    $authorization = 'SharedKey {0}:{1}' -f $customerId, $encodedHash
-
-    return $authorization
-}
-
 function Configure-PSF
 {
     [CmdletBinding()]
     param (
-        [parameter(Mandatory = $true)]
+        [Parameter(Mandatory = $true)]
         [ValidateNotNullOrEmpty()]
         [string] $PSFLogProvider
     )
@@ -337,9 +286,11 @@ function New-AppRegistration
     [CmdletBinding()]
     param (
         [Parameter(Mandatory = $true)]
+        [ValidateNotNullOrEmpty()]
         [string] $AppName
     )
 
+    # Set the default properties of the new app registration
     begin
     {
         $requiredResourceAccess = @{
@@ -355,27 +306,29 @@ function New-AppRegistration
         }
 
         $params = @{
-            DisplayName = $AppName
-            SignInAudience = "AzureADMyOrg"
+            DisplayName            = $AppName
             RequiredResourceAccess = $requiredResourceAccess
+            SignInAudience         = "AzureADMyOrg"
         }
     }
 
     process
     {
+
+        # Create new app registration
         try
         {
             $appRegistration = New-MgApplication @params
             $appObjectId = $appRegistration.Id
-            Write-PSFMessage -Level Verbose -Message "Sucessfully created application `"$AppName`" with object ID `"$($appRegistration.Id)`"" -Tag "Success" -Target $AppName
+            Write-PSFMessage -Level Verbose -Message "Sucessfully created application `"$AppName`" with object ID `"$($appRegistration.Id)`"" -Tag "Success" -Target $appObjectId
         }
 
         catch
         {
-            Write-PSFMessage -Level Error -Message "Error creating application with display name `"$AppName`"" -Tag "Error" -Target $AppName -ErrorRecord $_ 
+            Write-PSFMessage -Level Error -Message "Error creating application with display name `"$AppName`"" -Tag "Error" -Target $appObjectId -ErrorRecord $_ 
         }
 
-        # add application info to json output
+        # Add app properties to output object
         $outputAppValues = [PsCustomObject] @{
             time_created = (Get-Date).ToUniversalTime().ToString("yyyy-MM-dd HH:mm:ss +0")
 	        tenant_name  = (Get-MgOrganization).DisplayName
@@ -389,6 +342,52 @@ function New-AppRegistration
     }
 }
 
+function New-EnterpriseApplication
+{
+    [CmdletBinding()]
+    param (
+        [Parameter(Mandatory = $true)]
+        [ValidateNotNullOrEmpty()]
+        [guid] $AppId,
+
+        [Parameter(Mandatory = $false)]
+        [ValidateNotNullOrEmpty()]
+        [boolean] $Visible
+    )
+
+    # Set the default properties of the new enterprise application
+    begin
+    {
+        $params = @{
+            AppId = $AppId
+            Tags  = [System.Collections.ArrayList]@(
+                        "WindowsAzureActiveDirectoryIntegratedApp"
+                    )
+        }
+        
+        if ($Visible -eq $false)
+        {
+            $params.Tags.Add("HideApp") | Out-Null
+        }
+    }
+
+    process
+    {
+
+        # Create new enterprise application
+        try
+        {            
+            $enterpriseApplication = New-MgServicePrincipal @params
+          #  Write-PSFMessage -Level Verbose -Message "Sucessfully created enterprise application `"$AppName`" with object ID `"$($appRegistration.Id)`"" -Tag "Success" -Target $appObjectId
+        }
+
+        catch
+        {
+         #   Write-PSFMessage -Level Error -Message "Error creating application with display name `"$AppName`"" -Tag "Error" -Target $appObjectId -ErrorRecord $_ 
+        }
+    }
+}
+
 function New-OneTimeSecret
 {
     <#
@@ -399,10 +398,7 @@ function New-OneTimeSecret
     [CmdletBinding()]
     param (
         [Parameter(Mandatory)]
-        [string] $SecretMessage,
-
-        [Parameter()]
-        [string] $AppName
+        [string] $SecretMessage
     )
 
     # convert credentials into base64 and embed in header
@@ -422,104 +418,45 @@ function New-OneTimeSecret
         # send request to create secret and retrieve the share URL
         $oneTimeSecret = Invoke-RestMethod -Method POST -Headers $headers -Body $body -Uri "https://onetimesecret.com/api/v1/share" 
         $oneTimeSecretUrl = "https://onetimesecret.com/secret/$($oneTimeSecret.secret_key)"
-        Write-PSFMessage -Level Verbose -Message "Successfully created One Time Secret with URL `"$oneTimeSecretUrl`"" -Target $AppName -Tag "Success"
+        Write-PSFMessage -Level Verbose -Message "Successfully created One Time Secret with URL `"$oneTimeSecretUrl`"" -Tag "Success"
 
         return $oneTimeSecret
     }
 
     catch
     {
-        Write-PSFMessage -Level Error -Message "Error creating One Time Secret" -Target $AppName -Tag "Error" -ErrorRecord $_
+        Write-PSFMessage -Level Error -Message "Error creating One Time Secret" -Tag "Error" -ErrorRecord $_
     }
-}
-
-function Post-LogAnalyticsData
-{
-    <#
-    .SYNOPSIS
-        Function to create and post request to Azure Log Analytics
-
-    .NOTES
-        # Taken from https://docs.microsoft.com/en-us/azure/log-analytics/log-analytics-data-collector-api
-    #>
-
-    [CmdletBinding()]
-    param (
-        [parameter(Mandatory = $true)]
-        [string] $CustomerId,
-
-        [parameter(Mandatory = $true)]
-        [string] $SharedKey,
-
-        [parameter(Mandatory = $true)]
-        $Body,
-
-        [parameter(Mandatory = $true)]
-        [string] $LogType
-    )
-
-    $method = "POST"
-    $contentType = "application/json"
-    $resource = "/api/logs"
-    $rfc1123date = [DateTime]::UtcNow.ToString("r")
-    $contentLength = $Body.Length
-
-	$signatureArgs = @{
-		customerId	    = $CustomerId
-		sharedKey	    = $SharedKey
-		date	        = $rfc1123date
-		contentLength   = $contentLength
-		method	        = $method
-		contentType     = $contentType
-		resource        = $resource
-	}
-
-    $signature = Build-Signature @signatureArgs
-
-    $uri = "https://" + $CustomerId + ".ods.opinsights.azure.com" + $resource + "?api-version=2016-04-01"
-
-    $headers = @{
-        "Authorization"        = $signature;
-        "Log-Type"             = $LogType;
-        "x-ms-date"            = $rfc1123date;
-        #"time-generated-field" = $TimeStampField;
-    }
-
-    $response = Invoke-WebRequest -Uri $uri -Method $method -ContentType $contentType -Headers $headers -Body $Body -UseBasicParsing
-    return $response.StatusCode
 }
 
 function Update-AccessTokenIssuance
 {
-    [cmdletBinding()]
+    [CmdletBinding()]
     param (
-        [parameter(Mandatory = $true)]
-        [string] $AppObjectId,
+        [Parameter(Mandatory = $true)]
+        [ValidateNotNullOrEmpty()]
+        [guid] $AppObjectId,
         
-        [parameter(Mandatory = $true)]
-        [bool] $Enabled,
-
-        [parameter()]
-        [string] $AppName
+        [Parameter(Mandatory = $true)]
+        [ValidateNotNullOrEmpty()]
+        [bool] $Enabled
     )
 
     $params = @{
-        Web = @{
-            ImplicitGrantSettings = @{
-                EnableAccessTokenIssuance = $Enabled
-            }
+        ImplicitGrantSettings = @{
+            EnableAccessTokenIssuance = $Enabled
         }
     }
 
     try
     {
-        Update-MgApplication -ApplicationId $AppObjectId @params -ErrorAction Stop
-        Write-PSFMessage -Level Verbose -Message "Setting access token issuance to: $Enabled" -Target $AppName -Tag "Success"
+        Update-MgApplication -ApplicationId $AppObjectId -Web $params -ErrorAction Stop
+        Write-PSFMessage -Level Verbose -Message "Setting access token issuance to: $Enabled" -Target $AppObjectId -Tag "Success"
     }
 
     catch
     {
-        Write-PSFMessage -Level Error -Message "Error setting access token issuance" -Target $AppName -Tag "Error" -ErrorRecord $_
+        Write-PSFMessage -Level Error -Message "Error setting access token issuance" -Target $AppObjectId -Tag "Error" -ErrorRecord $_
     }
 
     # add to json output        
@@ -533,33 +470,30 @@ function Update-IdTokenIssuance
 {
     [cmdletBinding()]
     param (
-        [parameter(Mandatory = $true)]
-        [string] $AppObjectId,
+        [Parameter(Mandatory = $true)]
+        [ValidateNotNullOrEmpty()]
+        [guid] $AppObjectId,
         
-        [parameter(Mandatory = $true)]
-        [bool] $Enabled,
-
-        [parameter()]
-        [string] $AppName
+        [Parameter(Mandatory = $true)]
+        [ValidateNotNullOrEmpty()]
+        [bool] $Enabled
     )
 
     $params = @{
-        Web = @{
-            ImplicitGrantSettings = @{
-                EnableIdTokenIssuance = $Enabled
-            }
+        ImplicitGrantSettings = @{
+            EnableIdTokenIssuance = $Enabled
         }
     }
 
     try
     {
-        Update-MgApplication -ApplicationId $AppObjectId @params -ErrorAction Stop
-        Write-PSFMessage -Level Verbose -Message "Setting ID token issuance to: $Enabled" -Target $AppName -Tag "Success"
+        Update-MgApplication -ApplicationId $AppObjectId -Web $params -ErrorAction Stop
+        Write-PSFMessage -Level Verbose -Message "Setting ID token issuance to: $Enabled" -Target $AppObjectId -Tag "Success"
     }
 
     catch
     {
-        Write-PSFMessage -Level Error -Message "Error setting ID token issuance" -Target $AppName -Tag "Error" -ErrorRecord $_
+        Write-PSFMessage -Level Error -Message "Error setting ID token issuance" -Target $AppObjectId -Tag "Error" -ErrorRecord $_
     }
 
     # add to json output        
@@ -574,31 +508,34 @@ function Update-MSGraphAccess
     [cmdletBinding()]
     param (
         [parameter(Mandatory = $true)]
-        [string] $AppObjectId,
+        [ValidateNotNullOrEmpty()]
+        [guid] $AppObjectId,
         
         [parameter(Mandatory = $false)]
-        [string]$resourceAppId = "00000003-0000-0000-c000-000000000000",
+        [ValidateNotNullOrEmpty()]
+        [guid] $ResourceAppId = "00000003-0000-0000-c000-000000000000",
 
         [parameter(Mandatory = $true)]
-        $resourceAccessList,
-        
-        [parameter(Mandatory = $false)]
-        [string] $AppName
+        [ValidateNotNullOrEmpty()]
+        [object[]] $ResourceAccessList
     )
     
-    foreach ($permission in $resourceAccessList)
+    foreach ($permission in $ResourceAccessList)
     {
+
+        # Find the permission ID by using the permission name and type
         try
         {
             $permissionId = (Find-MgGraphPermission $permission.PermissionName -PermissionType $permission.PermissionType -ExactMatch -ErrorAction Stop).Id
-            Write-PSFMessage -Level Verbose -Message "Retrieved permission ID `"$($permissionID)`" for permission `"$($permission.PermissionName)`" of type `"$($permission.PermissionType)`"" -Target $AppName -Tag "Success"
+            Write-PSFMessage -Level Verbose -Message "Retrieved permission ID `"$($permissionID)`" for permission `"$($permission.PermissionName)`" of type `"$($permission.PermissionType)`"" -Target $AppObjectId -Tag "Success"
         }
 
         catch
         {
-            Write-PSFMessage -Level Error -Message "Error retrieving permission ID for permission `"$($permission.PermissionName)`" of type `"$($permission.PermissionType)`"" -Target $AppName -Tag "Error" -ErrorRecord $_
+            Write-PSFMessage -Level Error -Message "Error retrieving permission ID for permission `"$($permission.PermissionName)`" of type `"$($permission.PermissionType)`"" -Target $AppObjectId -Tag "Error" -ErrorRecord $_
         }
 
+        # Identify whether the permission type is an app role (application permission) or oauth2PermissionScope (delegated permission)
         switch ($permission.PermissionType)
         {
             "Application"
@@ -612,8 +549,9 @@ function Update-MSGraphAccess
             }
         }
         
+        # Reconstruct the permission syntax with the new permission ID and type
         $params = @{
-            ResourceAppId = $resourceAppId
+            ResourceAppId = $ResourceAppId
             ResourceAccess = @(
                 @{
                     Id   = $permissionId
@@ -622,27 +560,82 @@ function Update-MSGraphAccess
             )
         }       
 
+        # Combine the existing permissions of the target application with the new permissions
         $app = (Get-MgApplication -ApplicationId $AppObjectId)
         $params.ResourceAccess += $app.RequiredResourceAccess.ResourceAccess
 
+        # Update the application permissions using the existing permissions and the new permissions
         try
         {
             Update-MgApplication -ApplicationId $AppObjectId -RequiredResourceAccess $params
-            Write-PSFMessage -Level Verbose -Message "Successfully added permission `"$($permission.PermissionName)`"" -Target $AppName -Tag "Success"
+            Write-PSFMessage -Level Verbose -Message "Successfully added permission `"$($permission.PermissionName)`"" -Target $AppObjectId -Tag "Success"
         }
 
         catch
         {
-            Write-PSFMessage -Level Error -Message "Error adding permission `"$($permission.PermissionName)`"" -Target $AppName -Tag "Error" -ErrorRecord $_
+            Write-PSFMessage -Level Error -Message "Error adding permission `"$($permission.PermissionName)`"" -Target $AppObjectId -Tag "Error" -ErrorRecord $_
         }
     }
 
-    # get the full list of permissions and add to json output    
+    # Get the full list of permissions and add to json output    
     if ($outputAppValues)
     {
         $resourceAccessList = (Get-MgApplication -ApplicationId $AppObjectId).RequiredResourceAccess.ResourceAccess
 
         $outputAppValues | Add-Member -MemberType NoteProperty -Name resource_access -Value $resourceAccessList
+    }
+}
+
+function Update-ResourceAccessAdminConsent
+{
+    [CmdletBinding()]
+    param (
+        [Parameter(Mandatory = $true)]
+        [ValidateNotNullOrEmpty()]
+        [guid] $AppObjectId,
+        
+        [Parameter(Mandatory = $false)]
+        [ValidateNotNullOrEmpty()]
+        [guid] $ResourceAppId = "00000003-0000-0000-c000-000000000000",
+
+        [Parameter(Mandatory = $true)]
+        [ValidateNotNullOrEmpty()]
+        [object[]] $ResourceAccessList
+    )
+
+    # Retrieve the App Registration client Id, and the Enterprise Application object Id
+    $appClientId = (Get-MgApplication -Filter "Id eq '$($AppObjectId)'").AppId
+    $appServicePrincipalObjectId = (Get-MgServicePrincipal -Filter "AppId eq '$($appClientId)'").Id
+
+    # Retrieve the Enterprise Application object Id of the resource
+    $resourceServicePrincipalObjectId = (Get-MgServicePrincipal -Filter "AppId eq '$($ResourceAppId)'").Id    
+
+    # Construct the scope parameter as a space-delimited string of the delegated permissions
+    [string]$scope = ($ResourceAccessList | Where-Object {$_.PermissionType -eq "Delegated"}).PermissionName
+
+    $params = @{
+	    ClientId    = $appServicePrincipalObjectId
+	    ConsentType = "AllPrincipals"
+	    ResourceId  = $resourceServicePrincipalObjectId
+	    Scope       = $scope
+    }
+    
+    # Grant admin consent for the permissions
+    try
+    {
+        New-MgOauth2PermissionGrant @params | Out-Null
+        Write-PSFMessage -Level Verbose -Message "Successfully granted admin consent for permissions `"$($scope)`"" -Target $AppObjectId -Tag "Success"
+    }
+
+    catch
+    {
+        Write-PSFMessage -Level Error -Message "Error granting admin consent for permissions `"$($scope)`"" -Target $AppObjectId -Tag "Error" -ErrorRecord $_
+    }
+
+    # Add to output    
+    if ($outputAppValues)
+    {
+        $outputAppValues | Add-Member -MemberType NoteProperty -Name resource_access_admin_consent -Value $scope
     }
 }
 
@@ -700,7 +693,7 @@ function Update-MSGraphAccess
             # The 2nd loop is to ensure that all log providers are set before writing messages
             foreach ($logProvider in $PSFLogProvider)
             {
-                Write-PSFMessage -Level Verbose -Message "Set PSFramework logging provider to `"$($logProvider)`"" -Target $AppName
+                Write-PSFMessage -Level Verbose -Message "Set PSFramework logging provider to `"$($logProvider)`""
             }
         #endregion
 
@@ -730,7 +723,7 @@ function Update-MSGraphAccess
                 $connection = Invoke-RestMethod @params
                 $token_expires = (Get-Date).AddSeconds($connection.expires_in)
                 $graph = Connect-MgGraph -AccessToken $connection.access_token
-                Write-PSFMessage -Level Verbose -Message "Obtained access token with validity until $token_expires" -Target $AppName
+                Write-PSFMessage -Level Verbose -Message "Obtained access token with validity until $token_expires"
             }
         #endregion
     }
@@ -752,6 +745,111 @@ function Output-AppProperties
         [string] $PSFLogProvider
     )
 
+    function Build-Signature 
+    {
+        <#
+        .SYNOPSIS
+            Function to create authorization signature for posting to Azure Log Analytics
+
+        .NOTES
+            # Taken from https://docs.microsoft.com/en-us/azure/log-analytics/log-analytics-data-collector-api
+        #>
+
+        [CmdletBinding()]
+        param (
+            [Parameter(Mandatory = $true)]
+            [string] $CustomerId,
+
+            [Parameter(Mandatory = $true)]
+            [string] $SharedKey,
+
+            [Parameter(Mandatory = $true)]
+            [string] $Date,
+
+            [Parameter(Mandatory = $true)]
+            [string] $ContentLength,
+
+            [Parameter(Mandatory = $true)]
+            [string] $Method,
+
+            [Parameter(Mandatory = $true)]
+            [string] $ContentType,
+
+            [Parameter(Mandatory = $true)]
+            [string] $Resource
+        )
+
+        $xHeaders = "x-ms-date:" + $Date
+        $stringToHash = $Method + "`n" + $ContentLength + "`n" + $ContentType + "`n" + $xHeaders + "`n" + $Resource
+
+        $bytesToHash = [Text.Encoding]::UTF8.GetBytes($stringToHash)
+        $keyBytes = [Convert]::FromBase64String($SharedKey)
+
+        $sha256 = New-Object System.Security.Cryptography.HMACSHA256
+        $sha256.Key = $keyBytes
+        $calculatedHash = $sha256.ComputeHash($bytesToHash)
+        $encodedHash = [Convert]::ToBase64String($calculatedHash)
+        $authorization = 'SharedKey {0}:{1}' -f $CustomerId, $encodedHash
+
+        return $authorization
+    }
+
+    function Post-LogAnalyticsData
+    {
+        <#
+        .SYNOPSIS
+            Function to create and post request to Azure Log Analytics
+
+        .NOTES
+            # Taken from https://docs.microsoft.com/en-us/azure/log-analytics/log-analytics-data-collector-api
+        #>
+
+        [CmdletBinding()]
+        param (
+            [Parameter(Mandatory = $true)]
+            [string] $CustomerId,
+
+            [Parameter(Mandatory = $true)]
+            [string] $SharedKey,
+
+            [Parameter(Mandatory = $true)]
+            $Body,
+
+            [Parameter(Mandatory = $true)]
+            [string] $LogType
+        )
+
+        $method = "POST"
+        $contentType = "application/json"
+        $resource = "/api/logs"
+        $rfc1123date = [DateTime]::UtcNow.ToString("r")
+        $contentLength = $Body.Length
+
+	    $signatureArgs = @{
+		    CustomerId	    = $CustomerId
+		    SharedKey	    = $SharedKey
+		    Date	        = $rfc1123date
+		    ContentLength   = $contentLength
+		    Method	        = $method
+		    ContentType     = $contentType
+		    Resource        = $resource
+	    }
+
+        $signature = Build-Signature @signatureArgs
+
+        $uri = "https://" + $CustomerId + ".ods.opinsights.azure.com" + $resource + "?api-version=2016-04-01"
+
+        $headers = @{
+            "Authorization"        = $signature;
+            "Log-Type"             = $LogType;
+            "x-ms-date"            = $rfc1123date;
+            #"time-generated-field" = $TimeStampField;
+        }
+
+        $response = Invoke-WebRequest -Uri $uri -Method $method -ContentType $contentType -Headers $headers -Body $Body -UseBasicParsing
+        return $response.StatusCode
+    }
+
     switch ($PSFLogProvider)
     {
         "AzureLogAnalytics"
@@ -768,47 +866,62 @@ function Output-AppProperties
 
         "LogFile"
         {
+
             # construct file paths
             $outputFilePath = Join-Path -Path $FolderPath -ChildPath $OutputFile
             $outputFileObject = New-Object -TypeName PsObject
             $outputFileObject | Add-Member -MemberType NoteProperty -Name $appRegistration.DisplayName -Value $outputAppValues
-            $outputFileObject | ConvertTo-Json -Depth 5 | Out-File $outputFilePath -Append
+            $outputFileObject | ConvertTo-Json -Depth 8 | Out-File $outputFilePath -Append
         }
     }
 }
 
 #region process
-    # create app registration
+    # Create app registration
     $appRegistration, $appObjectId, $outputAppValues = New-AppRegistration -AppName $AppName
 
-    # create enterprise application/service principal
-    $enterpriseApplication = New-MgServicePrincipal -AppId $appRegistration.AppId -Tags @("HideApp", "WindowsAzureActiveDirectoryIntegratedApp")   
+    # Create enterprise application/service principal
+    New-EnterpriseApplication -AppId $appRegistration.AppId -Visible $Visible
 
     if ($AccessToken)
     {
-        Update-AccessTokenIssuance -AppObjectId $appObjectId -AppName $AppName -Enabled $AccessToken
+        Update-AccessTokenIssuance -AppObjectId $appObjectId -Enabled $AccessToken
     }
 
     if ($IdToken)
     {
-        Update-IdTokenIssuance -AppObjectId $appObjectId -AppName $AppName -Enabled $IdToken
+        Update-IdTokenIssuance -AppObjectId $appObjectId -Enabled $IdToken
     }
 
     if ($ApiPermissions)
     {
-        Update-MSGraphAccess -AppObjectId $appObjectId -ResourceAccessList $ApiPermissions -AppName $AppName
+        Update-MSGraphAccess -AppObjectId $appObjectId -ResourceAccessList $ApiPermissions
+    }
+    
+    if ($ApiPermissionsGrantConsent)
+    {
+        Update-ResourceAccessAdminConsent -AppObjectId $appObjectId -ResourceAccessList $ApiPermissions
     }
 
     # add application owners by object id
     if ($AppRegistrationOwners)
     {
-        Add-ApplicationOwner -AppObjectId $appObjectId -AppName $AppName -OwnerList $AppRegistrationOwners
+        Add-ApplicationOwner -AppObjectId $appObjectId -OwnerList $AppRegistrationOwners
+
+        if ($OwnersDirectoryRole)
+        {
+            $OwnerList = $OwnerList.Split(";")
+            foreach ($owner in $OwnerList)
+            {
+                Add-AADRole -User $owner -RoleName $OwnersDirectoryRole
+            }
+        }
     }
 
     # add client secret
     if ($ClientSecret)
     {
-        Add-ClientSecret -AppObjectId $appObjectId -AppName $AppName
+        Add-ClientSecret -AppObjectId $appObjectId
     }
 
     foreach ($logProvider in $PSFLogProvider)
