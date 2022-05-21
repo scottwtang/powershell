@@ -286,7 +286,7 @@ function Add-NativeUri
             if ( ($uri.StartsWith("https")) -or ($uri.StartsWith("http://localhost")) -or ($uri.StartsWith("http://127.0.0.1")) )
             {
                 Update-MgApplication -ApplicationId $AppObjectId @params
-                Write-PSFMessage -Level Verbose -Message "Successfully added native URI  `"$($uri)`"" -Target $AppObjectIds
+                Write-PSFMessage -Level Verbose -Message "Successfully added native URI  `"$($uri)`"" -Target $AppObjectId
             }
 
             else
