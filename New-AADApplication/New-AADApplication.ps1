@@ -3,13 +3,18 @@ param (
     [parameter(Mandatory = $true)]
     [ValidateNotNullOrEmpty()]
     [string] $AppName,
-
-    [parameter(Mandatory = $false)]
-    [ValidateNotNullOrEmpty()]
-    [string] $AppRegistrationOwners,
     
     [parameter(Mandatory = $false)]
-    [bool] $ClientSecret,
+    [bool] $Visible = $false,
+    
+    [parameter(Mandatory = $false)]
+    [string[]] $NativeUris,
+    
+    [parameter(Mandatory = $false)]
+    [string[]] $SpaUris,
+    
+    [parameter(Mandatory = $false)]
+    [string[]] $WebUris,
     
     [parameter(Mandatory = $false)]
     [bool] $AccessToken,
@@ -18,7 +23,7 @@ param (
     [bool] $IdToken,
     
     [parameter(Mandatory = $false)]
-    [bool] $Visible = $false,
+    [bool] $ClientSecret,
     
     [parameter(Mandatory = $false)]
     $ApiPermissions,
@@ -28,6 +33,10 @@ param (
         
     [parameter(Mandatory = $false)]
     [object[]] $AppRoles,
+
+    [parameter(Mandatory = $false)]
+    [ValidateNotNullOrEmpty()]
+    [string] $AppRegistrationOwners,
     
     [parameter(Mandatory = $false)]
     [ValidateNotNullOrEmpty()]
@@ -215,9 +224,9 @@ function Add-ClientSecret
 
         # Set the client secret properties such as description and lifetime
         $params = @{
-            DisplayName = "Uploaded on $(Get-Date -Format `"yyyy-MM-dd HH:mm:ss`")"
+            DisplayName   = "Uploaded on $(Get-Date -Format `"yyyy-MM-dd HH:mm:ss`")"
             StartDateTime = Get-Date
-            EndDateTime = (Get-Date).AddMonths($SecretLifetimeMonths)
+            EndDateTime   = (Get-Date).AddMonths($SecretLifetimeMonths)
         }
         
         # Create client secret
@@ -237,12 +246,177 @@ function Add-ClientSecret
     if ($outputAppValues)
     {
         $secret = [PSCustomObject] @{
-            secret_id = $secret.KeyId
+            secret_id          = $secret.KeyId
             secret_description = $secret.DisplayName
-            secret_value = "https://onetimesecret.com/secret/$($oneTimeSecret.secret_key)"
+            secret_value       = "https://onetimesecret.com/secret/$($oneTimeSecret.secret_key)"
         }
 
         $outputAppValues | Add-Member -MemberType NoteProperty -Name client_secret -Value $secret
+    }
+}
+
+function Add-NativeUri
+{
+    [CmdletBinding()]
+    param (
+        [Parameter(Mandatory = $true)]
+        [ValidateNotNullOrEmpty()]
+        [guid] $AppObjectId,
+
+        [Parameter(Mandatory = $true)]
+        [ValidateNotNullOrEmpty()]
+        [string[]] $NativeUris
+    )    
+
+    $NativeUris = $NativeUris.Split(";")
+
+    foreach ($uri in $NativeUris)
+    {
+        $params = @{
+            PublicClient = @{
+                RedirectUris = @("$uri")
+            }
+        }
+
+        $existingUris = (Get-MgApplication -ApplicationId $AppObjectId).PublicClient.RedirectUris
+        $params.PublicClient.RedirectUris += $existingUris
+
+        try
+        {
+            if ( ($uri.StartsWith("https")) -or ($uri.StartsWith("http://localhost")) -or ($uri.StartsWith("http://127.0.0.1")) )
+            {
+                Update-MgApplication -ApplicationId $AppObjectId @params
+                Write-PSFMessage -Level Verbose -Message "Successfully added native URI  `"$($uri)`"" -Target $AppObjectIds
+            }
+
+            else
+            {
+                throw "Invalid URI"
+            }
+        }
+
+        catch
+        {        
+            if ($_.Exception.Message -eq "Invalid URI")
+            {
+                Write-PSFMessage -Level Error -Message "Error adding native URI `"$($uri)`" | URI must start with `"https`" or `"http://localhost`" or `"http://127.0.0.1`"" -Target $AppObjectId -Tag "Error" -ErrorRecord $_
+            }
+
+            else
+            {
+                Write-PSFMessage -Level Error -Message "Error adding native URI `"$($uri)`"" -Target $AppObjectId -Tag "Error" -ErrorRecord $_
+            }
+        }
+    }
+}
+
+function Add-SpaUri
+{
+    [CmdletBinding()]
+    param (
+        [Parameter(Mandatory = $true)]
+        [ValidateNotNullOrEmpty()]
+        [guid] $AppObjectId,
+
+        [Parameter(Mandatory = $true)]
+        [ValidateNotNullOrEmpty()]
+        [string[]] $SpaUris
+    )    
+
+    $SpaUris = $SpaUris.Split(";")
+
+    foreach ($uri in $SpaUris)
+    {
+        $params = @{
+            Spa = @{
+                RedirectUris = @("$uri")
+            }
+        }
+
+        $existingUris = (Get-MgApplication -ApplicationId $AppObjectId).Spa.RedirectUris
+        $params.Spa.RedirectUris += $existingUris
+
+        try
+        {
+            if ( ($uri.StartsWith("https")) -or ($uri.StartsWith("http://localhost")) -or ($uri.StartsWith("http://127.0.0.1")) )
+            {
+                Update-MgApplication -ApplicationId $AppObjectId @params
+                Write-PSFMessage -Level Verbose -Message "Successfully added SPA URI  `"$($uri)`"" -Target $AppObjectId
+            }
+
+            else
+            {
+                throw "Invalid URI"
+            }
+        }
+
+        catch
+        {        
+            if ($_.Exception.Message -eq "Invalid URI")
+            {
+                Write-PSFMessage -Level Error -Message "Error adding SPA URI `"$($uri)`" | URI must start with `"https`" or `"http://localhost`" or `"http://127.0.0.1`"" -Target $AppObjectId -Tag "Error" -ErrorRecord $_
+            }
+
+            else
+            {
+                Write-PSFMessage -Level Error -Message "Error adding SPA URI `"$($uri)`"" -Target $AppObjectId -Tag "Error" -ErrorRecord $_
+            }
+        }
+    }
+}
+
+function Add-WebUri
+{
+    [CmdletBinding()]
+    param (
+        [Parameter(Mandatory = $true)]
+        [ValidateNotNullOrEmpty()]
+        [guid] $AppObjectId,
+
+        [Parameter(Mandatory = $true)]
+        [ValidateNotNullOrEmpty()]
+        [string[]] $WebUris
+    )    
+
+    $WebUris = $WebUris.Split(";")
+
+    foreach ($uri in $WebUris)
+    {
+        $params = @{
+            Web = @{
+                RedirectUris = @("$uri")
+            }
+        }
+
+        $existingUris = (Get-MgApplication -ApplicationId $AppObjectId).Web.RedirectUris
+        $params.Web.RedirectUris += $existingUris
+
+        try
+        {
+            if ( ($uri.StartsWith("https")) -or ($uri.StartsWith("http://localhost")) -or ($uri.StartsWith("http://127.0.0.1")) )
+            {
+                Update-MgApplication -ApplicationId $AppObjectId @params
+                Write-PSFMessage -Level Verbose -Message "Successfully added web URI  `"$($uri)`"" -Target $AppObjectId
+            }
+
+            else
+            {
+                throw "Invalid URI"
+            }
+        }
+
+        catch
+        {        
+            if ($_.Exception.Message -eq "Invalid URI")
+            {
+                Write-PSFMessage -Level Error -Message "Error adding web URI `"$($uri)`" | URI must start with `"https`" or `"http://localhost`"" -Target $AppObjectId -Tag "Error" -ErrorRecord $_
+            }
+
+            else
+            {
+                Write-PSFMessage -Level Error -Message "Error adding web URI `"$($uri)`"" -Target $AppObjectId -Tag "Error" -ErrorRecord $_
+            }
+        }
     }
 }
 
@@ -341,63 +515,6 @@ function New-AppRegistration
         }
 
         return $appRegistration, $appObjectId, $outputAppValues
-    }
-}
-
-function New-AppRoles
-{
-    [CmdletBinding()]
-    param (
-        [Parameter(Mandatory = $true)]
-        [ValidateNotNullOrEmpty()]
-        [guid] $AppObjectId,
-        
-        [Parameter(Mandatory = $true)]
-        [ValidateNotNullOrEmpty()]
-        [object[]] $AppRoles
-    )
-
-    foreach ($role in $AppRoles)
-    {
-
-        # Add default properties to each app role
-        $role.Add("Id", (New-Guid).Guid)
-        $role.Add("IsEnabled", $true)
-
-        $newRoles = @($role)
-    
-        try
-        {
-        
-            # Get the existing app roles and combine with new role
-            $existingAppRoles = (Get-MgApplication -ApplicationId $AppObjectId).AppRoles
-            $newRoles += ($existingAppRoles)
-        
-            # Update the application with new app roles
-            Update-MgApplication -ApplicationId $AppObjectId -AppRoles $newRoles -ErrorAction Stop
-            Write-PSFMessage -Level Verbose -Message "Successfully added new app role `"$($role.DisplayName)`"" -Target $AppObjectId
-        }
-
-        catch
-        {
-            if ($_.Exception.Message -eq "Request contains a property with duplicate values.")
-            {                
-                $duplicateRole = ((Get-MgApplication -ApplicationId $AppObjectId).AppRoles | Where-Object {$_.Value -eq $role.Value}).DisplayName
-                Write-PSFMessage -Level Error -Message "Error adding new app role `"$($role.DisplayName)`" | App role value `"$($role.Value)`" already used in existing role `"$($duplicateRole)`"" -Target $AppObjectId -Tag "Error"
-            }
-
-            else
-            {
-                Write-PSFMessage -Level Error -Message "Error adding app role `"$($role.DisplayName)`"" -Target $AppObjectId -Tag "Error" -ErrorRecord $_
-            }
-        }
-    }
-
-    # Add to json output    
-    if ($outputAppValues)
-    {
-        $appRoles = (Get-MgApplication -ApplicationId $AppObjectId).AppRoles
-        $outputAppValues | Add-Member -MemberType NoteProperty -Name app_roles -Value $appRoles
     }
 }
 
@@ -525,6 +642,63 @@ function Update-AccessTokenIssuance
     }
 }
 
+function Update-AppRoles
+{
+    [CmdletBinding()]
+    param (
+        [Parameter(Mandatory = $true)]
+        [ValidateNotNullOrEmpty()]
+        [guid] $AppObjectId,
+        
+        [Parameter(Mandatory = $true)]
+        [ValidateNotNullOrEmpty()]
+        [object[]] $AppRoles
+    )
+
+    foreach ($role in $AppRoles)
+    {
+
+        # Add default properties to each app role
+        $role.Add("Id", (New-Guid).Guid)
+        $role.Add("IsEnabled", $true)
+
+        $newRoles = @($role)
+    
+        try
+        {
+        
+            # Get the existing app roles and combine with new role
+            $existingAppRoles = (Get-MgApplication -ApplicationId $AppObjectId).AppRoles
+            $newRoles += ($existingAppRoles)
+        
+            # Update the application with new app roles
+            Update-MgApplication -ApplicationId $AppObjectId -AppRoles $newRoles -ErrorAction Stop
+            Write-PSFMessage -Level Verbose -Message "Successfully added new app role `"$($role.DisplayName)`"" -Target $AppObjectId
+        }
+
+        catch
+        {
+            if ($_.Exception.Message -eq "Request contains a property with duplicate values.")
+            {                
+                $duplicateRole = ((Get-MgApplication -ApplicationId $AppObjectId).AppRoles | Where-Object {$_.Value -eq $role.Value}).DisplayName
+                Write-PSFMessage -Level Error -Message "Error adding new app role `"$($role.DisplayName)`" | App role value `"$($role.Value)`" already used in existing role `"$($duplicateRole)`"" -Target $AppObjectId -Tag "Error"
+            }
+
+            else
+            {
+                Write-PSFMessage -Level Error -Message "Error adding app role `"$($role.DisplayName)`"" -Target $AppObjectId -Tag "Error" -ErrorRecord $_
+            }
+        }
+    }
+
+    # Add to json output    
+    if ($outputAppValues)
+    {
+        $appRoles = (Get-MgApplication -ApplicationId $AppObjectId).AppRoles
+        $outputAppValues | Add-Member -MemberType NoteProperty -Name app_roles -Value $appRoles
+    }
+}
+
 function Update-IdTokenIssuance
 {
     [cmdletBinding()]
@@ -562,7 +736,7 @@ function Update-IdTokenIssuance
     }
 }
 
-function Update-MSGraphAccess
+function Update-ResourceAccess
 {
     [cmdletBinding()]
     param (
@@ -942,6 +1116,21 @@ function Output-AppProperties
     # Create enterprise application/service principal
     New-EnterpriseApplication -AppId $appRegistration.AppId -Visible $Visible
 
+    if ($NativeUris)
+    {
+        New-NativeUris -AppObjectId $appObjectId -NativeUris $NativeUris
+    }
+
+    if ($SpaUris)
+    {
+        New-SpaUris -AppObjectId $appObjectId -SpaUris $SpaUris
+    }
+
+    if ($WebUris)
+    {
+        New-WebUris -AppObjectId $appObjectId -WebUris $WebUris
+    }
+
     if ($AccessToken)
     {
         Update-AccessTokenIssuance -AppObjectId $appObjectId -Enabled $AccessToken
@@ -954,7 +1143,7 @@ function Output-AppProperties
 
     if ($ApiPermissions)
     {
-        Update-MSGraphAccess -AppObjectId $appObjectId -ResourceAccessList $ApiPermissions
+        Update-ResourceAccess -AppObjectId $appObjectId -ResourceAccessList $ApiPermissions
     }
     
     if ($ApiPermissionsGrantConsent)
@@ -964,7 +1153,7 @@ function Output-AppProperties
 
     if ($AppRoles)
     {
-        New-AppRoles -AppObjectId $appObjectId -AppRoles $AppRoles
+        Update-AppRoles -AppObjectId $appObjectId -AppRoles $AppRoles
     }
 
     # add application owners by object id
