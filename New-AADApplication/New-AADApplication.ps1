@@ -905,6 +905,8 @@ function Update-ResourceAccessAdminConsent
                     $log_workspace_id = $configFileObject.log_analytics.workspace_id
                     $log_shared_key = $configFileObject.log_analytics.shared_key
 
+                    $key_vault_name = $configFileObject.key_vault.name
+
                     $ots_Username = $configFileObject.one_time_secret.username
                     $ots_Token = $configFileObject.one_time_secret.token
                 }
