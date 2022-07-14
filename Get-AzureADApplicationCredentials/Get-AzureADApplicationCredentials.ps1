@@ -9,7 +9,7 @@ param (
     $FileName = "$(Get-Date -f 'yyyy-MM-dd')-AzureADAppsCredentials.csv"
 )    
 
-function Output {
+function Export-Credential {
     [CmdletBinding()]
     param (
         [Parameter(Mandatory = $true)]
@@ -47,7 +47,7 @@ function Output {
     }
 }
 
-# Check if a Azure AD session is active
+# Check if an Azure AD session is active
 try
 {
     Get-AzureADTenantDetail | Out-Null
@@ -62,8 +62,8 @@ $applications = Get-AzureADApplication -All $true
 
 $output = foreach ($app in $applications)
 {
-    $secrets = $app.PasswordCredentials
     $certs = $app.KeyCredentials
+    $secrets = $app.PasswordCredentials
 
     # Get the app owners and their object ID
     $owners = Get-AzureADApplicationOwner -ObjectId $app.ObjectId
@@ -93,15 +93,24 @@ $output = foreach ($app in $applications)
 
     foreach ($cert in $certs)
     {
-        Output -App $app -OwnerNames $ownerNames -OwnerIds $ownerIds -Credential $cert -CredentialType "Certificate"
+        Export-Credential -App $app -OwnerNames $ownerNames -OwnerIds $ownerIds -Credential $cert -CredentialType "Certificate"
     }
 
     foreach ($secret in $secrets)
     {
-        Output -App $app -OwnerNames $ownerNames -OwnerIds $ownerIds -Credential $secret -CredentialType "ClientSecret"
+        Export-Credential -App $app -OwnerNames $ownerNames -OwnerIds $ownerIds -Credential $secret -CredentialType "ClientSecret"
     }
 }
 
 # Export the results as a CSV file
 $filePath = Join-Path $FolderPath -ChildPath $FileName
-$output | Export-CSV $filePath -NoTypeInformation
+
+try
+{
+    $output | Export-CSV $filePath -NoTypeInformation
+    Write-Host "Export to $filePath succeeded" -ForegroundColor Cyan
+}
+catch
+{
+    Write-Error "Export to $filePath failed | $_ "
+}
