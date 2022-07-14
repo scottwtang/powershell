@@ -44,6 +44,7 @@ function Export-Credential {
         "EndDate"                = $Credential.EndDate
         "Expired"                = ($Credential.EndDate -lt $now)
         "DaysToExpire"           = ($Credential.EndDate - $now).Days
+        "CertificateUsage"       = $Credential.Usage
     }
 }
 
