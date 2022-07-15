@@ -65,9 +65,10 @@ function Export-Credential {
     return [PSCustomObject] @{
         "ApplicationName"        = $App.DisplayName
         "ApplicationId"          = $App.AppId
-        "Owner"                  = $OwnerNames
-        "OwnerId"                = $OwnerIds
+        "Owners"                 = $OwnerNames
+        "OwnerIds"               = $OwnerIds
         "CredentialType"         = $CredentialType
+        "CredentialId"           = $Credential.KeyId
         "Expired"                = ($Credential.EndDate -lt $now)
         "StartDate"              = $Credential.StartDate
         "EndDate"                = $Credential.EndDate
@@ -122,12 +123,12 @@ $output = foreach ($app in $applications)
 
     foreach ($cert in $certs)
     {
-        Export-Credential -App $app -OwnerNames $ownerNames -OwnerIds $ownerIds -Credential $cert -CredentialType "Certificate"
+       # Export-Credential -App $app -OwnerNames $ownerNames -OwnerIds $ownerIds -Credential $cert -CredentialType "Certificate"
     }
 
     foreach ($secret in $secrets)
     {
-        Export-Credential -App $app -OwnerNames $ownerNames -OwnerIds $ownerIds -Credential $secret -CredentialType "ClientSecret"
+       # Export-Credential -App $app -OwnerNames $ownerNames -OwnerIds $ownerIds -Credential $secret -CredentialType "ClientSecret"
     }
 }
 
