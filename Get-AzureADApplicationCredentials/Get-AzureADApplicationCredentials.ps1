@@ -3,7 +3,7 @@
         This script gets information on expiring certificates and client secrets for all Azure AD applications.
 
     .DESCRIPTION
-        This scripts uses the AzureAD module to get information for all Azure AD applications with expiring certificates and client secrets, to assist with application management.
+        This scripts uses the AzureAD module to get information for all Azure AD app registrations with expiring certificates and client secrets, to assist with application management.
         Results are exported as a CSV file to the location determined using the script parameters.
 
     .PARAMETER FolderPath
@@ -68,9 +68,9 @@ function Export-Credential {
         "Owner"                  = $OwnerNames
         "OwnerId"                = $OwnerIds
         "CredentialType"         = $CredentialType
+        "Expired"                = ($Credential.EndDate -lt $now)
         "StartDate"              = $Credential.StartDate
         "EndDate"                = $Credential.EndDate
-        "Expired"                = ($Credential.EndDate -lt $now)
         "DaysToExpire"           = ($Credential.EndDate - $now).Days
         "CertificateUsage"       = $Credential.Usage
     }
