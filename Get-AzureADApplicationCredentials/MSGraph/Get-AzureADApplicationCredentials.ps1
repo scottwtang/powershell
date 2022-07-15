@@ -93,8 +93,6 @@ $applications = Get-MgApplication -All
 
 $output = foreach ($app in $applications)
 {
-    $certs = $app.KeyCredentials
-    $secrets = $app.PasswordCredentials
 
     # Get the app owners and their object ID
     $owners = Get-MgApplicationOwner -ApplicationId $app.Id
@@ -122,12 +120,14 @@ $output = foreach ($app in $applications)
         }
     ) -Join ";"
 
-    foreach ($cert in $certs)
+    # Get certificate properties
+    foreach ($cert in $app.KeyCredentials)
     {
         Export-Credential -App $app -OwnerNames $ownerNames -OwnerIds $ownerIds -Credential $cert -CredentialType "Certificate"
     }
 
-    foreach ($secret in $secrets)
+    # Get client secret properties
+    foreach ($secret in $app.PasswordCredentials)
     {
         Export-Credential -App $app -OwnerNames $ownerNames -OwnerIds $ownerIds -Credential $secret -CredentialType "ClientSecret"
     }
