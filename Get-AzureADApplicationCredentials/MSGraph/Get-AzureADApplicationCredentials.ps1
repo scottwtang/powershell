@@ -85,7 +85,7 @@ try
 }
 catch
 {
-    Connect-MgGraph
+    Connect-MgGraph -Scopes "Application.Read.All", "User.Read.All"
 }
 
 # Get all Azure AD applications
