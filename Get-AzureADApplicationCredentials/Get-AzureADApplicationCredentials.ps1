@@ -30,7 +30,7 @@
 param (
     [Parameter(Mandatory = $false)]
     [ValidateNotNullOrEmpty()]
-    $FolderPath = "$env:USERPROFILE\Desktop",
+    $FolderPath = "$env:USERPROFILE\Downloads",
 
     [Parameter(Mandatory = $false)]
     [ValidateNotNullOrEmpty()]
