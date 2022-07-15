@@ -1,3 +1,31 @@
+<#
+    .SYNOPSIS
+        This script gets information on expiring certificates and client secrets for all Azure AD applications.
+
+    .DESCRIPTION
+        This scripts uses the AzureAD module to get information for all Azure AD applications with expiring certificates and client secrets, to assist with application management.
+        Results are exported as a CSV file to the location determined using the script parameters.
+
+    .PARAMETER FolderPath
+        Folder path to save the exported results to.
+
+    .PARAMETER FileName
+        File name to save the exported results as.
+
+    .EXAMPLE
+        # Run script and save results to the default folder with the default filename
+        .\Get-AzureADApplicationCredentials.ps1
+        
+        # Run script and save results to the folder C:\AzureADAppsCredentials with the default filename
+        .\Get-AzureADApplicationCredentials.ps1 -FolderPath C:\AzureADAppsCredentials
+        
+        # Run script and save results to the default folder with the filename ScriptResults.csv
+        .\Get-AzureADApplicationCredentials.ps1 -FileName ScriptResults.csv
+        
+        # Run script and save results to the folder C:\AzureADAppsCredentials with the filename ScriptResults.csv
+        .\Get-AzureADApplicationCredentials.ps1 -FolderPath C:\AzureADAppsCredentials -FileName ScriptResults.csv
+#>
+    
 [CmdletBinding()]
 param (
     [Parameter(Mandatory = $false)]
