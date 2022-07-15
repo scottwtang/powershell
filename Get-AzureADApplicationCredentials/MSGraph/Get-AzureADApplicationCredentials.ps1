@@ -81,11 +81,11 @@ function Export-Credential {
 # Check if an Azure AD session is active
 try
 {
-   # Disconnect-MgGraph
+    Get-MgOrganization -ErrorAction Stop | Out-Null
 }
 catch
 {
-  #  Connect-MgGraph
+    Connect-MgGraph
 }
 
 # Get all Azure AD applications
