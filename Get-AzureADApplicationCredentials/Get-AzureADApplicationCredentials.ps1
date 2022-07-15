@@ -7,10 +7,10 @@
         Results are exported as a CSV file to the location determined using the script parameters.
 
     .PARAMETER FolderPath
-        Folder path to save the exported results to.
+        Folder path to export the results to.
 
     .PARAMETER FileName
-        File name to save the exported results as.
+        File name to to export the results as.
 
     .EXAMPLE
         # Run script and save results to the default folder with the default filename
