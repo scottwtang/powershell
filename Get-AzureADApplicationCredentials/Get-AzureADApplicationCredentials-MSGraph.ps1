@@ -3,8 +3,8 @@
         This script gets information on expiring certificates and client secrets for all Azure AD applications.
 
     .DESCRIPTION
-        This scripts uses the Microsoft.Graph module to get information for all Azure AD app registrations with expiring certificates and client secrets, to assist with application management.
-        Results are exported as a CSV file to the location determined using the script parameters.
+        This scripts uses the Microsoft.Graph module to get information for all Azure AD app registrations and Enterprise Applications with expiring certificates and client secrets, to assist with application management.
+        Results are exported as a CSV file to the location determined in the script parameters.
 
     .PARAMETER FolderPath
         Folder path to export the results to.
