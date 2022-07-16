@@ -14,16 +14,16 @@
 
     .EXAMPLE
         # Run script and save results to the default folder with the default filename
-        .\Get-AzureADApplicationCredentials.ps1
+        .\Get-AzureADApplicationCredentials-AzureAD.ps1
         
         # Run script and save results to the folder C:\AzureADAppsCredentials with the default filename
-        .\Get-AzureADApplicationCredentials.ps1 -FolderPath C:\AzureADAppsCredentials
+        .\Get-AzureADApplicationCredentials-AzureAD.ps1 -FolderPath C:\AzureADAppsCredentials
         
         # Run script and save results to the default folder with the filename ScriptResults.csv
-        .\Get-AzureADApplicationCredentials.ps1 -FileName ScriptResults.csv
+        .\Get-AzureADApplicationCredentials-AzureAD.ps1 -FileName ScriptResults.csv
         
         # Run script and save results to the folder C:\AzureADAppsCredentials with the filename ScriptResults.csv
-        .\Get-AzureADApplicationCredentials.ps1 -FolderPath C:\AzureADAppsCredentials -FileName ScriptResults.csv
+        .\Get-AzureADApplicationCredentials-AzureAD.ps1 -FolderPath C:\AzureADAppsCredentials -FileName ScriptResults.csv
 #>
     
 [CmdletBinding()]
