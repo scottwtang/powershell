@@ -42,13 +42,16 @@ function Export-Credential {
     param (
         [Parameter(Mandatory = $true)]
         [ValidateNotNullOrEmpty()]
-        $App,
+        $App,        
+
+        [Parameter(Mandatory = $true)]
+        [string] $ObjectType,        
+
+        [Parameter(Mandatory = $true)]
+        [string] $OwnerNames,
         
         [Parameter(Mandatory = $true)]
-        $OwnerNames,
-        
-        [Parameter(Mandatory = $true)]
-        $OwnerIds,
+        [string] $OwnerIds,
         
         [Parameter(Mandatory = $true)]
         [ValidateNotNullOrEmpty()]
@@ -65,6 +68,7 @@ function Export-Credential {
     return [PSCustomObject] @{
         "ApplicationName"        = $App.DisplayName
         "ApplicationId"          = $App.AppId
+        "ObjectType"             = $ObjectType
         "Owners"                 = $OwnerNames
         "OwnerIds"               = $OwnerIds
         "CredentialType"         = $CredentialType
@@ -78,24 +82,33 @@ function Export-Credential {
     }
 }
 
-# Check if an Azure AD session is active
-try
-{
-    Get-MgOrganization -ErrorAction Stop | Out-Null
-}
-catch
-{
-    Connect-MgGraph -Scopes "Application.Read.All", "User.Read.All"
-}
+function Get-Owners {
+    [CmdletBinding()]
+    param (
+        [Parameter(Mandatory = $true)]
+        [ValidateNotNullOrEmpty()]
+        [string] $AppObjectId,
+        
+        [Parameter(Mandatory = $true)]
+        [ValidateNotNullOrEmpty()]
+        [string] $ObjectType
+    )
 
-# Get all Azure AD applications
-$applications = Get-MgApplication -All
+    # Determine the object type which each use different cmdlets for retrieving the owner
+    switch ($ObjectType)
+    {
+        Application
+        {
+            $owners = Get-MgApplicationOwner -ApplicationId $app.Id
+        }
 
-$output = foreach ($app in $applications)
-{
+        ServicePrincipal
+        {
+            $owners = Get-MgServicePrincipalOwner -ServicePrincipalId $AppObjectId
+        }
+    }
 
-    # Get the app owners and their object ID
-    $owners = Get-MgApplicationOwner -ApplicationId $app.Id
+    # Join all owner IDs as one string
     $ownerIds = $owners.Id -Join ";"
 
     # Set ownerNames to null for applications with no assigned owner
@@ -120,16 +133,61 @@ $output = foreach ($app in $applications)
         }
     ) -Join ";"
 
+    return $ownerNames, $ownerIds
+}
+
+# Check if an Azure AD session is active
+try
+{
+    Get-MgOrganization -ErrorAction Stop | Out-Null
+}
+catch
+{
+    Connect-MgGraph -Scopes "Application.Read.All", "User.Read.All"
+}
+
+# Get all Azure AD App Registrations
+$applications = Get-MgApplication -All
+
+# Get all Azure AD Enterprise Applications configured for SAML SSO
+$servicePrincipals = Get-MgServicePrincipal -All | Where-Object { 
+    ($_.Tags -contains "WindowsAzureActiveDirectoryCustomSingleSignOnApplication") -or 
+    ($_.Tags -contains "WindowsAzureActiveDirectoryGalleryApplicationNonPrimaryV1") -or 
+    ($_.Tags -contains "WindowsAzureActiveDirectoryGalleryApplicationPrimaryV1") -or 
+    ($_.Tags -contains "WindowsAzureActiveDirectoryIntegratedApp")
+}
+
+# Loop through each App Registration and retrieve the credentials properties
+$output = foreach ($app in $applications)
+{
+
+    # Get the app owners and their object ID
+    $ownerNames, $ownerIds = Get-Owners -AppObjectId $app.Id -ObjectType "Application"
+
     # Get certificate properties
     foreach ($cert in $app.KeyCredentials)
     {
-        Export-Credential -App $app -OwnerNames $ownerNames -OwnerIds $ownerIds -Credential $cert -CredentialType "Certificate"
+        Export-Credential -App $app -ObjectType "Application" -OwnerNames $ownerNames -OwnerIds $ownerIds -Credential $cert -CredentialType "Certificate"
     }
 
     # Get client secret properties
     foreach ($secret in $app.PasswordCredentials)
     {
-        Export-Credential -App $app -OwnerNames $ownerNames -OwnerIds $ownerIds -Credential $secret -CredentialType "ClientSecret"
+        Export-Credential -App $app -ObjectType "Application" -OwnerNames $ownerNames -OwnerIds $ownerIds -Credential $secret -CredentialType "ClientSecret"
+    }
+}
+
+# Loop through each Enterprise Application and retrieve the credentials properties
+$output += foreach ($app in $servicePrincipals)
+{
+
+    # Get the app owners and their object ID
+    $ownerNames, $ownerIds = Get-Owners -AppObjectId $app.Id -ObjectType "ServicePrincipal"
+
+    # Get certificate properties filtering for certificates with Usage of Verify, to exclude the private key objects used for signing
+    foreach ($cert in $app.KeyCredentials | Where-Object {$_.Usage -eq "Verify"} )
+    {
+        Export-Credential -App $app -ObjectType "ServicePrincipal" -OwnerNames $ownerNames -OwnerIds $ownerIds -Credential $cert -CredentialType "Certificate"
     }
 }
 
@@ -138,7 +196,7 @@ $filePath = Join-Path $FolderPath -ChildPath $FileName
 
 try
 {
-    $output | Export-CSV $filePath -NoTypeInformation
+    $output | Sort-Object ApplicationName | Export-CSV $filePath -NoTypeInformation
     Write-Host "Export to $filePath succeeded" -ForegroundColor Cyan
 }
 catch
