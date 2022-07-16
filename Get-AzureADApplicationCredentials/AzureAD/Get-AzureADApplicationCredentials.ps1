@@ -45,10 +45,10 @@ function Export-Credential {
         $App,
         
         [Parameter(Mandatory = $true)]
-        $OwnerNames,
+        [string] $OwnerNames,
         
         [Parameter(Mandatory = $true)]
-        $OwnerIds,
+        [string] $OwnerIds,
         
         [Parameter(Mandatory = $true)]
         [ValidateNotNullOrEmpty()]
@@ -65,6 +65,7 @@ function Export-Credential {
     return [PSCustomObject] @{
         "ApplicationName"        = $App.DisplayName
         "ApplicationId"          = $App.AppId
+        "ObjectType"             = $App.ObjectType
         "Owners"                 = $OwnerNames
         "OwnerIds"               = $OwnerIds
         "CredentialType"         = $CredentialType
@@ -77,24 +78,33 @@ function Export-Credential {
     }
 }
 
-# Check if an Azure AD session is active
-try
-{
-    Get-AzureADTenantDetail | Out-Null
-}
-catch
-{
-    Connect-AzureAD
-}
+function Get-Owners {
+    [CmdletBinding()]
+    param (
+        [Parameter(Mandatory = $true)]
+        [ValidateNotNullOrEmpty()]
+        [string] $AppObjectId,
+        
+        [Parameter(Mandatory = $true)]
+        [ValidateNotNullOrEmpty()]
+        [string] $ObjectType
+    )
 
-# Get all Azure AD applications
-$applications = Get-AzureADApplication -All $true
+    # Determine the object type which each use different cmdlets for retrieving the owner
+    switch ($ObjectType)
+    {
+        Application
+        {
+            $owners = Get-AzureADApplicationOwner -ObjectId $AppObjectId
+        }
 
-$output = foreach ($app in $applications)
-{
+        ServicePrincipal
+        {
+            $owners = Get-AzureADServicePrincipalOwner -ObjectId $AppObjectId
+        }
+    }
 
-    # Get the app owners and their object ID
-    $owners = Get-AzureADApplicationOwner -ObjectId $app.ObjectId
+    # Join all owner IDs as one string
     $ownerIds = $owners.ObjectId -Join ";"
 
     # Set ownerNames to null for applications with no assigned owner
@@ -119,6 +129,37 @@ $output = foreach ($app in $applications)
         }
     ) -Join ";"
 
+    return $ownerNames, $ownerIds
+}
+
+# Check if an Azure AD session is active
+try
+{
+    Get-AzureADTenantDetail | Out-Null
+}
+catch
+{
+    Connect-AzureAD
+}
+
+# Get all Azure AD App Registrations
+$applications = Get-AzureADApplication -All $true
+
+# Get all Azure AD Enterprise Applications configured for SAML SSO
+$servicePrincipals = Get-AzureADServicePrincipal -All $true | Where-Object { 
+    ($_.Tags -contains "WindowsAzureActiveDirectoryCustomSingleSignOnApplication") -or 
+    ($_.Tags -contains "WindowsAzureActiveDirectoryGalleryApplicationNonPrimaryV1") -or 
+    ($_.Tags -contains "WindowsAzureActiveDirectoryGalleryApplicationPrimaryV1") -or 
+    ($_.Tags -contains "WindowsAzureActiveDirectoryIntegratedApp")
+}
+
+# Loop through each App Registration and retrieve the credentials properties
+$output = foreach ($app in $applications)
+{
+
+    # Get the app owners and their object ID
+    $ownerNames, $ownerIds = Get-Owners -AppObjectId $app.ObjectId -ObjectType $app.ObjectType
+    
     # Get certificate properties
     foreach ($cert in $app.KeyCredentials)
     {
@@ -132,12 +173,26 @@ $output = foreach ($app in $applications)
     }
 }
 
+# Loop through each Enterprise Application and retrieve the credentials properties
+$output += foreach ($app in $servicePrincipals)
+{
+
+    # Get the app owners and their object ID
+    $ownerNames, $ownerIds = Get-Owners -AppObjectId $app.ObjectId -ObjectType $app.ObjectType
+
+    # Get certificate properties filtering for certificates with Usage of Verify, to exclude the private key objects used for signing
+    foreach ($cert in $app.KeyCredentials | Where-Object {$_.Usage -eq "Verify"} )
+    {
+        Export-Credential -App $app -OwnerNames $ownerNames -OwnerIds $ownerIds -Credential $cert -CredentialType "Certificate"
+    }
+}
+
 # Export the results as a CSV file
 $filePath = Join-Path $FolderPath -ChildPath $FileName
 
 try
 {
-    $output | Export-CSV $filePath -NoTypeInformation
+    $output | Sort-Object ApplicationName | Export-CSV $filePath -NoTypeInformation
     Write-Host "Export to $filePath succeeded" -ForegroundColor Cyan
 }
 catch
