@@ -45,10 +45,10 @@ function Export-Credential {
         $App,
         
         [Parameter(Mandatory = $true)]
-        [string] $OwnerNames,
+        $OwnerNames,
         
         [Parameter(Mandatory = $true)]
-        [string] $OwnerIds,
+        $OwnerIds,
         
         [Parameter(Mandatory = $true)]
         [ValidateNotNullOrEmpty()]
